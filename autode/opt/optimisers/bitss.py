@@ -200,6 +200,7 @@ class BITSSOptimiser(BaseOptimiser):
         self._imgpair.update_bitss_grad()
         self._imgpair.update_molecular_hessian()
         self._imgpair.update_bitss_hessian_by_calculation()
+        self._coords.e = self._imgpair.bitss_energy
 
     def update_gradient_and_energy_update_hessian(self):
         """Gradient and energy update and Hessian update with formula"""
@@ -207,6 +208,7 @@ class BITSSOptimiser(BaseOptimiser):
         self._imgpair.estimate_barrier_and_update_constraints()
         self._imgpair.update_bitss_grad()
         self._imgpair.update_bitss_hessian_by_interpolation()
+        self._coords.e = self._imgpair.bitss_energy
 
     def update_hessian_gradient_and_energy(self) -> None:
         """
