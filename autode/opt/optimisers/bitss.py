@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 from typing import Optional, Union
 
@@ -32,9 +34,9 @@ class BITSSOptimiser(BaseOptimiser):
         reduction_fac: float = 0.3,
         rmsd_tol_angs: Union[Distance, float] = Distance(0.01, "ang"),
         g_tol: GradientRMS = GradientRMS(1e-3, units="Ha Å-1"),
-        max_global_micro_iter: int = 500,
+        max_global_micro_iter: int = 400,
         recalc_constr_freq: int = 30,
-        init_trust_radius: float = 0.005,
+        init_trust_radius: float = 0.1,
     ):
         # TODO check reasonableness of microiter values
         # TODO docstrings
@@ -117,7 +119,7 @@ class BITSSOptimiser(BaseOptimiser):
             f"for estimating Hessian and current barrier height."
         )
         # In macro-iters the distance criteria is tightened
-
+        self._coords = self._imgpair.bitss_coords
         macroiter_num = 0
         while not self.converged:
             # tighten the distance criteria
@@ -125,27 +127,34 @@ class BITSSOptimiser(BaseOptimiser):
                 1 - self._reduction_fac
             ) * self._imgpair.euclidean_dist
             macroiter_num += 1
+            logger.error(
+                f"Macro-iteration: {macroiter_num} - target distance: "
+                f"{self._imgpair.target_dist :.3f}"
+            )
             # must get analytic Hessian as underlying PES changed
-            self.update_gradient_and_energy_calculate_hessian()
+            # todo no need to recalculate molecular engrad/hess
+            self.update_gradient_and_energy_calculate_constr_and_hessian()
             # now start RFO iterations
             while True:
                 self._rfo_step()
+                time.sleep(0.7)
                 if (
                     self._recalc_constr_freq != 0
                     and self.iteration % self._recalc_constr_freq == 0
                 ):
-                    self.update_gradient_and_energy_calculate_hessian()
+                    self.update_gradient_and_energy_calculate_constr_and_hessian()
                 else:
                     self.update_gradient_and_energy_update_hessian()
                 self._log_convergence()
                 if self.rms_grad < 0.01:
                     break
                 if self._exceeded_maximum_iteration:
+                    logger.error("Exceeded the max number of micro-iterations")
                     # todo add logger message
                     break  # todo use return and a different message
             if self._exceeded_maximum_iteration:
                 break
-
+        """
         # todo remove
         self._coords = self._imgpair.bitss_coords
         self._imgpair.target_dist = (
@@ -192,12 +201,19 @@ class BITSSOptimiser(BaseOptimiser):
         logger.error(
             f"Finished optimisation run - converged: {self.converged}"
         )
+        """
 
-    def update_gradient_and_energy_calculate_hessian(self):
-        """Gradient and energy update and Hessian analytic calculation"""
+    def update_bitss_terms_without_molecular_grad_hess(self):
+        """"""
+
+    def update_gradient_and_energy_calculate_constr_and_hessian(self):
+        """Gradient and energy update and constraint update and
+        Hessian analytic calculation"""
         self._imgpair.update_molecular_engrad()
         self._imgpair.estimate_barrier_and_update_constraints()
         self._imgpair.update_bitss_grad()
+        # when constraint changes, underlyin PES is changed so must
+        # reconstruct analytic Hessian
         self._imgpair.update_molecular_hessian()
         self._imgpair.update_bitss_hessian_by_calculation()
         self._coords.e = self._imgpair.bitss_energy
@@ -205,7 +221,6 @@ class BITSSOptimiser(BaseOptimiser):
     def update_gradient_and_energy_update_hessian(self):
         """Gradient and energy update and Hessian update with formula"""
         self._imgpair.update_molecular_engrad()
-        self._imgpair.estimate_barrier_and_update_constraints()
         self._imgpair.update_bitss_grad()
         self._imgpair.update_bitss_hessian_by_interpolation()
         self._coords.e = self._imgpair.bitss_energy
@@ -775,6 +790,7 @@ class BinaryImagePair:
         )
         self.hess = energy_hess + distance_hess
         self._make_hessian_positive_definite()
+        # todo is this really necessary with RFO??
 
     def initialise_run(self):
         pass
@@ -869,6 +885,9 @@ class BinaryImagePair:
 
         self.kappa_dist = float(
             max(kappa_d_first_option, kappa_d_second_option)
+        )
+        logger.error(
+            f"kappa_eng ={self.kappa_eng}, kappa_dist ={self.kappa_dist}"
         )
 
     def update_bitss_hessian_by_interpolation(self):
