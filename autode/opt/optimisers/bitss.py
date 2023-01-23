@@ -37,6 +37,7 @@ class BITSSOptimiser(BaseOptimiser):
         max_global_micro_iter: int = 400,
         recalc_constr_freq: int = 30,
         init_trust_radius: float = 0.1,
+        max_trust_radius: float = 0.2,
     ):
         # TODO check reasonableness of microiter values
         # TODO docstrings
@@ -57,6 +58,8 @@ class BITSSOptimiser(BaseOptimiser):
         self._gtol = g_tol
         self._recalc_constr_freq = int(recalc_constr_freq)
         self._trust = init_trust_radius
+        self._max_trust = max_trust_radius
+        self._last_pred_delta_e = None
 
     @property
     def ts(self) -> Optional["autode.species.Species"]:
@@ -146,6 +149,7 @@ class BITSSOptimiser(BaseOptimiser):
                 else:
                     self.update_gradient_and_energy_update_hessian()
                 self._log_convergence()
+                self.update_trust_radius()
                 if self.rms_grad < 0.01:
                     break
                 if self._exceeded_maximum_iteration:
@@ -212,7 +216,7 @@ class BITSSOptimiser(BaseOptimiser):
         self._imgpair.update_molecular_engrad()
         self._imgpair.estimate_barrier_and_update_constraints()
         self._imgpair.update_bitss_grad()
-        # when constraint changes, underlyin PES is changed so must
+        # when constraint changes, underlying PES is changed so must
         # reconstruct analytic Hessian
         self._imgpair.update_molecular_hessian()
         self._imgpair.update_bitss_hessian_by_calculation()
@@ -361,9 +365,33 @@ class BITSSOptimiser(BaseOptimiser):
                 + self._trust / delta_magnitude * delta_s
             )
 
+        scaled_step = (self._trust / delta_magnitude * delta_s).reshape(-1, 1)
+        pred_delta_e = self._imgpair.grad.reshape(1, -1) @ scaled_step
+        pred_delta_e += 0.5 * (
+            scaled_step.T @ self._imgpair.hess @ scaled_step
+        )
+        self._last_pred_delta_e = float(pred_delta_e)
+
         self._imgpair.bitss_coords = new_coords
         self._coords = new_coords  # also update local history
         return factor
+
+    def update_trust_radius(self):
+        # J. Chem. Phys. 80, 1204 (1984)
+        if self._last_pred_delta_e is None:
+            return
+        assert self._coords.e is not None
+        assert self._history[-2].e is not None
+        actual_delta_e = self._coords.e - self._history[-2].e
+        ratio = actual_delta_e / self._last_pred_delta_e
+        if ratio < 0.25:
+            self._trust = (2 / 3) * self._trust
+        elif (ratio > 0.25) and (ratio < 0.75):
+            pass
+        elif ratio > 0.75:  # todo also have an upper bound here ratio < 1.25
+            self._trust = min(1.2 * self._trust, self._max_trust)
+        logger.error(f"Current trust radius - {self._trust:.3f} Angstrom")
+        return
 
     @property
     def rms_grad(self) -> GradientRMS:
