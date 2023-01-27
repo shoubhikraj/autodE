@@ -789,31 +789,24 @@ class BinaryImagePair:
         energy_hess = np.vstack((upper_part, lower_part))
         # distance terms
         # del d * 2 * kappa_d * (d - d_i)
-        dist_vec = (
-            self._left_image.coordinates.flatten()
-            - self._right_image.coordinates.flatten()
+        total_coord_vec = np.concatenate(
+            (
+                self._left_image.coordinates.flatten(),
+                self._right_image.coordinates.flatten(),
+            )
+        ).reshape(-1, 1)
+        grad_d = float(1 / self.euclidean_dist) * (
+            self.A_mat() @ total_coord_vec
         )
-        distance_grad = (
-            2
-            * (1 / self.euclidean_dist)
-            * np.concatenate((dist_vec, -dist_vec))
-            * self.kappa_dist
-            * (self.euclidean_dist - self.target_dist)
+        hess_d = float(1 / self.euclidean_dist) * (
+            self.A_mat() - (grad_d @ grad_d.T)
         )
-        hess_d = (1 / self.euclidean_dist) * (
-            self.A_mat()
-            - (distance_grad.reshape(-1, 1) @ distance_grad.reshape(1, -1))
-        )
-        distance_hess = (
-            2
-            * self.kappa_dist
-            * (distance_grad.reshape(-1, 1) @ distance_grad.reshape(1, -1))
-        )
+        distance_hess = 2 * self.kappa_dist * (grad_d @ grad_d.T)
         distance_hess += (
             2
-            * self.kappa_dist
-            * self.euclidean_dist
-            * (1 - 2 * self.target_dist)
+            * float(self.kappa_dist)
+            * float(self.euclidean_dist)
+            * float(1 - 2 * self.target_dist)
             * hess_d
         )
         self.hess = energy_hess + distance_hess
