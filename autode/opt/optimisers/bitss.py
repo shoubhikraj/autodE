@@ -12,6 +12,8 @@ from autode.opt.optimisers.hessian_update import (
     BFGSPDUpdate,
     BFGSDampedUpdate,
     BofillUpdate,
+    SR1Update,
+    NullUpdate,
 )
 from autode.opt.coordinates import CartesianCoordinates, OptCoordinates
 from autode.config import Config
@@ -31,10 +33,10 @@ class BITSSOptimiser(BaseOptimiser):
         self,
         initial_species: "autode.species.Species",
         final_species: "autode.species.Species",
-        reduction_fac: float = 0.3,
+        reduction_fac: float = 0.2,
         rmsd_tol_angs: Union[Distance, float] = Distance(0.01, "ang"),
         g_tol: GradientRMS = GradientRMS(1e-3, units="Ha Å-1"),
-        max_global_micro_iter: int = 400,
+        max_global_micro_iter: int = 500,
         recalc_constr_freq: int = 30,
         init_trust_radius: float = 0.1,
         max_trust_radius: float = 0.2,
@@ -150,7 +152,7 @@ class BITSSOptimiser(BaseOptimiser):
                     self.update_gradient_and_energy_update_hessian()
                 self._log_convergence()
                 self.update_trust_radius()
-                if self.rms_grad < 0.01:
+                if self.rms_grad < 0.001:
                     break
                 if self._exceeded_maximum_iteration:
                     logger.error("Exceeded the max number of micro-iterations")
@@ -385,7 +387,7 @@ class BITSSOptimiser(BaseOptimiser):
         actual_delta_e = self._coords.e - self._history[-2].e
         ratio = actual_delta_e / self._last_pred_delta_e
         if ratio < 0.25:
-            self._trust = (2 / 3) * self._trust
+            self._trust = (1 / 2) * self._trust
         elif (ratio > 0.25) and (ratio < 0.75):
             pass
         elif ratio > 0.75:  # todo also have an upper bound here ratio < 1.25
@@ -427,7 +429,7 @@ class BITSSOptimiser(BaseOptimiser):
             f"#iteration:{self.iteration:4}   reactant:{self._imgpair._left_image.energy:.6f}"
             f"    product:{self._imgpair._right_image.energy:.6f}   "
             f"  BITSS energy:{self._imgpair.bitss_energy:.3f}  "
-            f"  RMS BITSS gradient:{self.rms_grad:.3f} "
+            f"  RMS BITSS gradient:{self.rms_grad:.5f} "
             f"  Distance:{self._imgpair.euclidean_dist:.3f}  "
             f"  Target distance:{self._imgpair.target_dist:.3f}"
         )
@@ -503,11 +505,7 @@ class BinaryImagePair:
         self.last_grad = None  # previous gradient
         self.last_hess = None  # previous Hessian
         self.last_bitss_coords = None
-        self._hessian_update_types = [
-            BFGSPDUpdate,
-            BFGSDampedUpdate,
-            BofillUpdate,
-        ]
+        self._hessian_update_types = [BFGSPDUpdate, BofillUpdate, NullUpdate]
 
     def _sanity_check(self) -> None:
         """
@@ -876,7 +874,9 @@ class BinaryImagePair:
         )
 
         # kappa_e = alpha / (2 * E_B)
-        self.kappa_eng = float(self.alpha / (2 * self.estimated_barrier))
+        self.kappa_eng = max(
+            float(self.alpha / (2 * self.estimated_barrier)), 100
+        )
 
         left_grad = np.array(self._left_image.gradient.flatten())
         right_grad = np.array(self._right_image.gradient.flatten())
@@ -1070,7 +1070,7 @@ class BinaryImagePair:
             raise ValueError
 
     def _make_hessian_positive_definite(
-        self, min_eigenvalue: float = 1e-5
+        self, min_eigenvalue: float = 1e-10
     ) -> None:
         """
         Ensure that the eigenvalues of a matrix are all >0 i.e. the matrix
