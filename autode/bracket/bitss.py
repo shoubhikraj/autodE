@@ -1,8 +1,10 @@
 import numpy as np
 
 from autode.bracket.imagepair import TwoSidedImagePair
-from autode.values import Distance
+from autode.values import Distance, GradientRMS
 from autode.opt.coordinates import OptCoordinates, CartesianCoordinates
+
+import autode.species
 
 
 class BinaryImagePair(TwoSidedImagePair):
@@ -13,9 +15,9 @@ class BinaryImagePair(TwoSidedImagePair):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self._k_eng: float = None  # energy constraint
-        self._k_dist: float = None  # distance constraint
-        self._d_i: float = None  # d_i
+        self._k_eng = None  # energy constraint
+        self._k_dist = None  # distance constraint
+        self._d_i = None  # d_i
 
     def _check_bitss_params_grad_defined(self):
         assert self.left_coord.g is not None
@@ -35,6 +37,7 @@ class BinaryImagePair(TwoSidedImagePair):
         """
         Distance between BITSS images. (Currently implemented
         as Euclidean distance in Cartesian)
+
         Returns:
             (Distance):
         """
@@ -191,4 +194,29 @@ class BinaryImagePair(TwoSidedImagePair):
 
 
 class BITSS:
-    pass
+    """
+    Binary-Image Transition State Search. It begins with
+    two images (e.g. reactant and product) and then minimises
+    their energies under two constraints, energy and distance.
+    The energy constraint ensures that the images do not jump
+    over one another, and the distance constraint ensures that
+    the images are pulled closer, towards the transition state
+    """
+    def __init__(
+        self,
+        initial_species: autode.species.Species,
+        final_species: autode.species.Species,
+        maxiter: int = 200,
+        dist_tol: Distance = Distance(1.0, 'ang'),
+        gtol: GradientRMS = GradientRMS(5.e-4, 'ha/ang')
+    ):
+        self.imgpair = BinaryImagePair(initial_species, final_species)
+        self._dist_tol = Distance(dist_tol, 'ang')
+        self._gtol = GradientRMS(gtol, 'ha/ang')
+
+        self._engrad_method = None
+        self._hess_method = None
+        self._maxiter =
+
+    def calculate(self):
+        self.imgpair.update_one_img_molecular_engrad()
