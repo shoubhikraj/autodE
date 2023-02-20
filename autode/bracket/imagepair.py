@@ -530,3 +530,8 @@ class TwoSidedImagePair(BaseImagePair):
         self.right_coord.update_h_from_cart_h(right_hess)
 
         return None
+
+    def update_both_img_molecular_hessian_by_formula(self):
+        # simply call the functions for each side
+        self.update_one_img_molecular_hessian_by_formula('left')
+        self.update_one_img_molecular_hessian_by_formula('right')

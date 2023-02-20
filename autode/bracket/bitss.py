@@ -28,6 +28,12 @@ class BinaryImagePair(TwoSidedImagePair):
         assert self._k_dist is not None
 
     @property
+    def bitss_iters(self):
+        # in BITSS both sides should updated at the same time
+        assert self.total_iters % 2 == 0
+        return self.total_iters / 2
+
+    @property
     def dist_vec(self) -> np.ndarray:
         """The distance vector pointing to right_image from left_image"""
         return np.array(self.left_coord - self.right_coord)
@@ -226,11 +232,15 @@ class BITSS:
         self._reduction_fac = abs(float(reduction_factor))
 
     @property
-    def converged(self):
+    def converged(self) -> bool:
         if self.imgpair.dist < self._dist_tol:
             return True
         else:
             return False
+
+    @property
+    def _exceeded_maximum_iterations(self) -> bool:
+        return True if self.imgpair.bitss_iters > self._maxiter else False
 
     def calculate(self):
         self.imgpair.update_one_img_molecular_engrad('left')
@@ -248,7 +258,16 @@ class BITSS:
         return None
 
     @property
-    def microiter_converged(self):
+    def _microiter_converged(self) -> bool:
+        """
+        Whether optimiser "micro-iterations" are converged.
+        Checks whether distance is close to the set value of
+        target distance for current macro-iteration, and whether
+        RMS gradient of BITSS energy is lower than global gtol
+
+        Returns:
+            (bool): True if converged, False otherwise
+        """
         dist_criteria_met = np.isclose(self.imgpair.dist,
                                        self.imgpair.target_dist, atol=5.e-4)
         grad_criteria_met = self.imgpair.rms_bitss_grad() < self._gtol
@@ -257,9 +276,35 @@ class BITSS:
         else:
             return False
 
-    def bitss_minimise(self):
+    def bitss_minimise(self) -> bool:
         """
         Minimises the BITSS potential with RFO method
         """
-        pass
+        while not self._microiter_converged:
+            if self._exceeded_maximum_iterations:
+                return False
+            self._rfo_microiter_step()
+            self.imgpair.update_both_img_molecular_engrad()
+            # todo check stability is it better to update molecular hessian
+            # or just the bitss hessian
+            self.imgpair.update_both_img_molecular_hessian_by_formula()
+
+        return True
+
+    def _rfo_microiter_step(self):
+        h_n = self.imgpair.n_atoms
+        # form the augmented Hessian
+        aug_h = np.zeros(shape=(h_n+1, h_n+1), dtype=np.float64)
+        aug_h[:h_n, :h_n] = self.imgpair.bitss_hess()
+        aug_h[-1, :h_n] = self.imgpair.bitss_grad()
+        aug_h[:h_n, -1] = self.imgpair.bitss_grad()
+
+        aug_h_lmda, aug_h_v = np.linalg.eigh(aug_h)
+        # RF step uses the lowest non-zero eigenvalue
+        mode = np.where(np.abs(aug_h_lmda) > 1.e-10)[0][0]
+
+        # step is scaled by the final element of eigenvector
+        delta_s = aug_h_v[:-1, mode] / aug_h_v[-1, mode]
+        delta_s = delta_s.flatten()  # turn into flat vector
+
 
