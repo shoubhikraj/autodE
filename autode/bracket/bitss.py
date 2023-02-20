@@ -13,11 +13,14 @@ class BinaryImagePair(TwoSidedImagePair):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self._k_eng = None  # energy constraint
-        self._k_dist = None  # distance constraint
-        self._d_i = None  # d_i
+        self._k_eng: float = None  # energy constraint
+        self._k_dist: float = None  # distance constraint
+        self._d_i: float = None  # d_i
 
-    def _check_bitss_params_defined(self):
+    def _check_bitss_params_grad_defined(self):
+        assert self.left_coord.g is not None
+        assert self.right_coord.g is not None
+
         assert self._d_i is not None
         assert self._k_eng is not None
         assert self._k_dist is not None
@@ -111,9 +114,8 @@ class BinaryImagePair(TwoSidedImagePair):
         Returns:
             (np.ndarray): flat gradient of shape (n_atoms * 3 * 2,)
         """
-        assert self.left_coord.g is not None
-        assert self.right_coord.g is not None
-        self._check_bitss_params_defined()
+
+        self._check_bitss_params_grad_defined()
 
         # energy terms arising from coordinates of left image (r_1)
         # = grad(E_1) * (1 + 2 * k_e * (E_1 - E_2))
@@ -135,4 +137,58 @@ class BinaryImagePair(TwoSidedImagePair):
         return np.concatenate((left_term, right_term)) + dist_term
 
     def bitss_hess(self):
-        pass
+        """
+        Calculate the Hessian(second derivative) of the BITSS
+        energy, using the molecular Hessians
+
+        Returns:
+            (np.ndarray): Hessian array with shape (3 * n_atoms, 3 * n_atoms)
+        """
+        assert self.left_coord.h is not None
+        assert self.right_coord.h is not None
+        self._check_bitss_params_grad_defined()
+
+        # terms from E_1, E_2 in upper left square of Hessian
+        upper_left_sq = self.left_coord.h * (
+            1
+            + float(2 * self.left_coord.e * self._k_eng)
+            - float(2 * self.right_coord.e * self._k_eng)
+        )
+        upper_left_sq += (
+            2 * self._k_eng * np.outer(self.left_coord.g, self.left_coord.g)
+        )
+
+        # terms from E_1, E_2 in lower right square of Hessian
+        lower_right_sq = self.right_coord.h * (
+            1
+            - float(2 * self.left_coord.e * self._k_eng)
+            + float(2 * self.right_coord.e * self._k_eng)
+        )
+        lower_right_sq += (
+            2 * self._k_eng * np.outer(self.right_coord.g, self.right_coord.g)
+        )
+
+        # terms from E_1, E_2 in upper right square of Hessian
+        upper_right_sq = (
+            -2 * self._k_eng * np.outer(self.left_coord.g, self.right_coord.g)
+        )
+
+        # terms from E_1, E_2 in lower left square of Hessian
+        lower_left_sq = (
+            -2 * self._k_eng * np.outer(self.right_coord.g, self.left_coord.g)
+        )
+
+        # build up the energy terms
+        upper_part = np.hstack((upper_left_sq, upper_right_sq))
+        lower_part = np.hstack((lower_left_sq, lower_right_sq))
+        energy_terms = np.vstack((upper_part, lower_part))
+
+        # distance terms
+        # grad(d) * 2 * k_d * (d - d_i)
+        total_coord_col = self.bitss_coords.reshape(-1, 1)
+        # todo finish
+        # todo do we really need Hessians?
+
+
+class BITSS:
+    pass
