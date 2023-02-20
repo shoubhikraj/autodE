@@ -110,7 +110,7 @@ class BinaryImagePair(TwoSidedImagePair):
         return float(e_1 + e_2 + self._k_eng * (e_1 - e_2)**2
                      + self._k_dist * (self.dist - self._d_i)**2)
 
-    def bitss_grad(self):
+    def bitss_grad(self) -> np.ndarray:
         """
         Calculate the gradient of the BITSS energy (in Hartree/Angstrom)
 
@@ -138,6 +138,11 @@ class BinaryImagePair(TwoSidedImagePair):
         )
         # form total gradient
         return np.concatenate((left_term, right_term)) + dist_term
+
+    def rms_bitss_grad(self) -> GradientRMS:
+        grad = self.bitss_grad()
+        rms_g = np.sqrt(np.average(np.mean(grad)))
+        return GradientRMS(rms_g, units='ha/ang')
 
     def bitss_hess(self):
         """
@@ -208,7 +213,8 @@ class BITSS:
         final_species: autode.species.Species,
         maxiter: int = 200,
         dist_tol: Distance = Distance(1.0, 'ang'),
-        gtol: GradientRMS = GradientRMS(5.e-4, 'ha/ang')
+        reduction_factor: float = 0.5,
+        gtol: GradientRMS = GradientRMS(5.0e-4, 'ha/ang')
     ):
         self.imgpair = BinaryImagePair(initial_species, final_species)
         self._dist_tol = Distance(dist_tol, 'ang')
@@ -216,7 +222,44 @@ class BITSS:
 
         self._engrad_method = None
         self._hess_method = None
-        self._maxiter =
+        self._maxiter = abs(int(maxiter))
+        self._reduction_fac = abs(float(reduction_factor))
+
+    @property
+    def converged(self):
+        if self.imgpair.dist < self._dist_tol:
+            return True
+        else:
+            return False
 
     def calculate(self):
-        self.imgpair.update_one_img_molecular_engrad()
+        self.imgpair.update_one_img_molecular_engrad('left')
+        self.imgpair.update_one_img_molecular_engrad('right')
+
+        while not self.converged:
+            self._reduce_target_dist()
+
+    def _reduce_target_dist(self) -> None:
+        """
+        Reduces the target distance for BITSS. (This can be
+        considered as a BITSS macro-iteration step)
+        """
+        self.imgpair.target_dist = (1-self._reduction_fac) * self.imgpair.dist
+        return None
+
+    @property
+    def microiter_converged(self):
+        dist_criteria_met = np.isclose(self.imgpair.dist,
+                                       self.imgpair.target_dist, atol=5.e-4)
+        grad_criteria_met = self.imgpair.rms_bitss_grad() < self._gtol
+        if dist_criteria_met and grad_criteria_met:
+            return True
+        else:
+            return False
+
+    def bitss_minimise(self):
+        """
+        Minimises the BITSS potential with RFO method
+        """
+        pass
+
