@@ -292,7 +292,7 @@ class BITSS:
 
     def bitss_minimise(self) -> bool:
         """
-        Minimises the BITSS potential with RFO method
+        Minimises the BITSS potential with hybrid RFO/QA method
         """
         while not self._microiter_converged:
             if self._exceeded_maximum_iterations:
@@ -305,14 +305,16 @@ class BITSS:
 
         return True
 
-    def _rfo_microiter_step(self):
+    def _rfo_microiter_step(self) -> None:
         hess = self.imgpair.bitss_hess()
+        grad = self.imgpair.bitss_grad()
         h_n = self.imgpair.n_atoms
+
         # form the augmented Hessian
         aug_h = np.zeros(shape=(h_n+1, h_n+1), dtype=np.float64)
         aug_h[:h_n, :h_n] = hess
-        aug_h[-1, :h_n] = self.imgpair.bitss_grad()
-        aug_h[:h_n, -1] = self.imgpair.bitss_grad()
+        aug_h[-1, :h_n] = grad
+        aug_h[:h_n, -1] = grad
 
         aug_h_lmda, aug_h_v = np.linalg.eigh(aug_h)
         # RF step uses the lowest non-zero eigenvalue
@@ -321,6 +323,7 @@ class BITSS:
         # step is scaled by the final element of eigenvector
         delta_s = aug_h_v[:-1, mode] / aug_h_v[-1, mode]
         delta_s = delta_s.flatten()  # turn into flat vector
+        # todo put rfo part in another func
 
         # check if step is in trust radius
         step_size = np.linalg.norm(delta_s)
@@ -330,12 +333,64 @@ class BITSS:
             self.imgpair.bitss_coords = new_coords
         else:
             # take a QA/TRIM step
-            h_lmda = np.linalg.eigvalsh(hess)
-            first_mode = np.where(np.abs(h_lmda) > 1.e-10)[0][0]
-            first_b = h_lmda[first_mode]  # first non-zero eigenvalue of H
+            delta_s = _get_qa_minimise_step(hess, grad, self._trust)
+            new_coords = self.imgpair.bitss_coords + delta_s
+            self.imgpair.bitss_coords = new_coords
+
+        return None
 
 
+def _get_qa_minimise_step(
+        hessian: np.ndarray,
+        gradient: np.ndarray,
+        trust: float) -> np.ndarray:
+    """
+    Using current Hessian and gradient, get a minimising
+    step, whose magnitude (norm) is equal to the trust
+    radius (QA/TRIM method)
 
+    Args:
+        hessian (np.ndarray):
+        gradient (np.ndarray):
+        trust (float):
+    Returns:
+        (np.ndarray): the step as a flat array
+    """
+    from scipy.optimize import root_scalar
 
+    n = hessian.shape[0]
+    h_eigvals = np.linalg.eigvalsh(hessian)
+    first_mode = np.where(np.abs(h_eigvals) > 1.e-10)[0][0]
+    first_b = h_eigvals[first_mode]  # first non-zero eigenvalue of H
+
+    def step_length_error(lmda):
+        shift_h = lmda * np.eye(n) - hessian  # level-shifted hessian
+        inv_shift_h = np.linalg.inv(shift_h)
+        step = - inv_shift_h @ gradient.reshape(-1, 1)
+        return np.linalg.norm(step) - trust
+
+    # The value of shift parameter lambda must lie within (-infinity, first_b)
+    # Need to find the roots of the 1D function step_length_error
+    i = 0
+    for _ in range(1000):
+        i += 1
+        err = step_length_error(first_b - i * 1.0)
+        if err < 0.0:  # found location where f(x) < 0
+            break
+
+    # must have f(x) > 0 at first eigenvalue
+    assert step_length_error(first_b) > 0, "Wrong shape of error function"
+    # Use scipy's root finder
+    res = root_scalar(step_length_error, method='brentq',
+                      bracket=[first_b, first_b - i*1.0])
+    assert res.converged
+
+    lmda_final = res.root
+    shift_h = lmda_final * np.eye(n) - hessian
+    inv_shift_h = np.linalg.inv(shift_h)
+    delta_s = - inv_shift_h @ gradient.reshape(-1, 1)
+
+    return delta_s
+    # todo convert assert checks to exception and default to RFO scaling
 
 
