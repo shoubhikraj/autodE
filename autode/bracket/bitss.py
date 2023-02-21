@@ -220,7 +220,10 @@ class BITSS:
         maxiter: int = 200,
         dist_tol: Distance = Distance(1.0, 'ang'),
         reduction_factor: float = 0.5,
-        gtol: GradientRMS = GradientRMS(5.0e-4, 'ha/ang')
+        gtol: GradientRMS = GradientRMS(5.0e-4, 'ha/ang'),
+        init_trust: Distance = Distance(0.05, 'ang'),
+        max_trust: Distance = Distance(0.2, 'ang'),
+        min_trust: Distance = Distance(0.01, 'ang')
     ):
         self.imgpair = BinaryImagePair(initial_species, final_species)
         self._dist_tol = Distance(dist_tol, 'ang')
@@ -230,6 +233,17 @@ class BITSS:
         self._hess_method = None
         self._maxiter = abs(int(maxiter))
         self._reduction_fac = abs(float(reduction_factor))
+
+        self._trust = float(Distance(init_trust, 'ang'))
+        self._max_tr = float(Distance(max_trust, 'ang'))
+        self._min_tr = float(Distance(min_trust, 'ang'))
+
+        # todo doc if negative turn off trust update
+        if self._trust < 0:
+            self._tr_upd = False
+            self._trust = abs(self._trust)
+        else:
+            self._tr_upd = True
 
     @property
     def converged(self) -> bool:
@@ -292,10 +306,11 @@ class BITSS:
         return True
 
     def _rfo_microiter_step(self):
+        hess = self.imgpair.bitss_hess()
         h_n = self.imgpair.n_atoms
         # form the augmented Hessian
         aug_h = np.zeros(shape=(h_n+1, h_n+1), dtype=np.float64)
-        aug_h[:h_n, :h_n] = self.imgpair.bitss_hess()
+        aug_h[:h_n, :h_n] = hess
         aug_h[-1, :h_n] = self.imgpair.bitss_grad()
         aug_h[:h_n, -1] = self.imgpair.bitss_grad()
 
@@ -306,5 +321,21 @@ class BITSS:
         # step is scaled by the final element of eigenvector
         delta_s = aug_h_v[:-1, mode] / aug_h_v[-1, mode]
         delta_s = delta_s.flatten()  # turn into flat vector
+
+        # check if step is in trust radius
+        step_size = np.linalg.norm(delta_s)
+        if step_size <= self._trust:
+            # take an RFO step
+            new_coords = self.imgpair.bitss_coords + delta_s
+            self.imgpair.bitss_coords = new_coords
+        else:
+            # take a QA/TRIM step
+            h_lmda = np.linalg.eigvalsh(hess)
+            first_mode = np.where(np.abs(h_lmda) > 1.e-10)[0][0]
+            first_b = h_lmda[first_mode]  # first non-zero eigenvalue of H
+
+
+
+
 
 
