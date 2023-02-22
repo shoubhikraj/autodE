@@ -12,6 +12,7 @@ class BinaryImagePair(TwoSidedImagePair):
     A Binary-Image pair use for the BITSS procedure for
     transition state search
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -47,7 +48,7 @@ class BinaryImagePair(TwoSidedImagePair):
         Returns:
             (Distance):
         """
-        return Distance(np.linalg.norm(self.dist_vec), 'ang')
+        return Distance(np.linalg.norm(self.dist_vec), "ang")
 
     @property
     def target_dist(self) -> Distance:
@@ -56,7 +57,7 @@ class BinaryImagePair(TwoSidedImagePair):
         Returns:
             (Distance)
         """
-        return Distance(self._d_i, 'ang')
+        return Distance(self._d_i, "ang")
 
     @target_dist.setter
     def target_dist(self, value):
@@ -68,7 +69,7 @@ class BinaryImagePair(TwoSidedImagePair):
         if value is None:
             return
         if isinstance(value, Distance):
-            self._d_i = float(value.to('ang'))
+            self._d_i = float(value.to("ang"))
         elif isinstance(value, float):
             self._d_i = value
         else:
@@ -91,7 +92,7 @@ class BinaryImagePair(TwoSidedImagePair):
     @bitss_coords.setter
     def bitss_coords(self, value):
         if isinstance(value, OptCoordinates):
-            coords = value.to('ang').flatten()
+            coords = value.to("ang").flatten()
         elif isinstance(value, np.ndarray):
             coords = value.flatten()
         else:
@@ -100,8 +101,8 @@ class BinaryImagePair(TwoSidedImagePair):
         if coords.shape[0] != (3 * 2 * self.n_atoms):
             raise ValueError("Coordinates have the wrong dimensions")
 
-        self.left_coord = coords[:3 * self.n_atoms]
-        self.right_coord = coords[3 * self.n_atoms:]
+        self.left_coord = coords[: 3 * self.n_atoms]
+        self.right_coord = coords[3 * self.n_atoms :]
 
     def bitss_energy(self) -> float:
         """
@@ -113,8 +114,12 @@ class BinaryImagePair(TwoSidedImagePair):
         # E_BITSS = E_1 + E_2 + k_e(E_1 - E_2)^2 + k_d(d-d_i)^2
         e_1 = float(self.left_coord.e)
         e_2 = float(self.right_coord.e)
-        return float(e_1 + e_2 + self._k_eng * (e_1 - e_2)**2
-                     + self._k_dist * (self.dist - self._d_i)**2)
+        return float(
+            e_1
+            + e_2
+            + self._k_eng * (e_1 - e_2) ** 2
+            + self._k_dist * (self.dist - self._d_i) ** 2
+        )
 
     def bitss_grad(self) -> np.ndarray:
         """
@@ -139,8 +144,11 @@ class BinaryImagePair(TwoSidedImagePair):
         # distance term
         # = grad(d) * 2 * k_d * (d - d_i)
         dist_term = (
-            (1/self.dist) * np.concatenate((self.dist_vec, -self.dist_vec))
-            * 2 * self._k_dist * (self.dist - self._d_i)
+            (1 / self.dist)
+            * np.concatenate((self.dist_vec, -self.dist_vec))
+            * 2
+            * self._k_dist
+            * (self.dist - self._d_i)
         )
         # form total gradient
         return np.concatenate((left_term, right_term)) + dist_term
@@ -148,7 +156,7 @@ class BinaryImagePair(TwoSidedImagePair):
     def rms_bitss_grad(self) -> GradientRMS:
         grad = self.bitss_grad()
         rms_g = np.sqrt(np.average(np.mean(grad)))
-        return GradientRMS(rms_g, units='ha/ang')
+        return GradientRMS(rms_g, units="ha/ang")
 
     def bitss_hess(self):
         """
@@ -213,30 +221,31 @@ class BITSS:
     over one another, and the distance constraint ensures that
     the images are pulled closer, towards the transition state
     """
+
     def __init__(
         self,
         initial_species: autode.species.Species,
         final_species: autode.species.Species,
         maxiter: int = 200,
-        dist_tol: Distance = Distance(1.0, 'ang'),
+        dist_tol: Distance = Distance(1.0, "ang"),
         reduction_factor: float = 0.5,
-        gtol: GradientRMS = GradientRMS(5.0e-4, 'ha/ang'),
-        init_trust: Distance = Distance(0.05, 'ang'),
-        max_trust: Distance = Distance(0.2, 'ang'),
-        min_trust: Distance = Distance(0.01, 'ang')
+        gtol: GradientRMS = GradientRMS(5.0e-4, "ha/ang"),
+        init_trust: Distance = Distance(0.05, "ang"),
+        max_trust: Distance = Distance(0.2, "ang"),
+        min_trust: Distance = Distance(0.01, "ang"),
     ):
         self.imgpair = BinaryImagePair(initial_species, final_species)
-        self._dist_tol = Distance(dist_tol, 'ang')
-        self._gtol = GradientRMS(gtol, 'ha/ang')
+        self._dist_tol = Distance(dist_tol, "ang")
+        self._gtol = GradientRMS(gtol, "ha/ang")
 
         self._engrad_method = None
         self._hess_method = None
         self._maxiter = abs(int(maxiter))
         self._reduction_fac = abs(float(reduction_factor))
 
-        self._trust = float(Distance(init_trust, 'ang'))
-        self._max_tr = float(Distance(max_trust, 'ang'))
-        self._min_tr = float(Distance(min_trust, 'ang'))
+        self._trust = float(Distance(init_trust, "ang"))
+        self._max_tr = float(Distance(max_trust, "ang"))
+        self._min_tr = float(Distance(min_trust, "ang"))
 
         # todo doc if negative turn off trust update
         if self._trust < 0:
@@ -257,8 +266,8 @@ class BITSS:
         return True if self.imgpair.bitss_iters > self._maxiter else False
 
     def calculate(self):
-        self.imgpair.update_one_img_molecular_engrad('left')
-        self.imgpair.update_one_img_molecular_engrad('right')
+        self.imgpair.update_one_img_molecular_engrad("left")
+        self.imgpair.update_one_img_molecular_engrad("right")
 
         while not self.converged:
             self._reduce_target_dist()
@@ -268,7 +277,9 @@ class BITSS:
         Reduces the target distance for BITSS. (This can be
         considered as a BITSS macro-iteration step)
         """
-        self.imgpair.target_dist = (1-self._reduction_fac) * self.imgpair.dist
+        self.imgpair.target_dist = (
+            1 - self._reduction_fac
+        ) * self.imgpair.dist
         return None
 
     @property
@@ -282,8 +293,9 @@ class BITSS:
         Returns:
             (bool): True if converged, False otherwise
         """
-        dist_criteria_met = np.isclose(self.imgpair.dist,
-                                       self.imgpair.target_dist, atol=5.e-4)
+        dist_criteria_met = np.isclose(
+            self.imgpair.dist, self.imgpair.target_dist, atol=5.0e-4
+        )
         grad_criteria_met = self.imgpair.rms_bitss_grad() < self._gtol
         if dist_criteria_met and grad_criteria_met:
             return True
@@ -311,14 +323,14 @@ class BITSS:
         h_n = self.imgpair.n_atoms
 
         # form the augmented Hessian
-        aug_h = np.zeros(shape=(h_n+1, h_n+1), dtype=np.float64)
+        aug_h = np.zeros(shape=(h_n + 1, h_n + 1), dtype=np.float64)
         aug_h[:h_n, :h_n] = hess
         aug_h[-1, :h_n] = grad
         aug_h[:h_n, -1] = grad
 
         aug_h_lmda, aug_h_v = np.linalg.eigh(aug_h)
         # RF step uses the lowest non-zero eigenvalue
-        mode = np.where(np.abs(aug_h_lmda) > 1.e-10)[0][0]
+        mode = np.where(np.abs(aug_h_lmda) > 1.0e-10)[0][0]
 
         # step is scaled by the final element of eigenvector
         delta_s = aug_h_v[:-1, mode] / aug_h_v[-1, mode]
@@ -341,9 +353,8 @@ class BITSS:
 
 
 def _get_qa_minimise_step(
-        hessian: np.ndarray,
-        gradient: np.ndarray,
-        trust: float) -> np.ndarray:
+    hessian: np.ndarray, gradient: np.ndarray, trust: float
+) -> np.ndarray:
     """
     Using current Hessian and gradient, get a minimising
     step, whose magnitude (norm) is equal to the trust
@@ -360,13 +371,13 @@ def _get_qa_minimise_step(
 
     n = hessian.shape[0]
     h_eigvals = np.linalg.eigvalsh(hessian)
-    first_mode = np.where(np.abs(h_eigvals) > 1.e-10)[0][0]
+    first_mode = np.where(np.abs(h_eigvals) > 1.0e-10)[0][0]
     first_b = h_eigvals[first_mode]  # first non-zero eigenvalue of H
 
     def step_length_error(lmda):
         shift_h = lmda * np.eye(n) - hessian  # level-shifted hessian
         inv_shift_h = np.linalg.inv(shift_h)
-        step = - inv_shift_h @ gradient.reshape(-1, 1)
+        step = -inv_shift_h @ gradient.reshape(-1, 1)
         return np.linalg.norm(step) - trust
 
     # The value of shift parameter lambda must lie within (-infinity, first_b)
@@ -381,16 +392,17 @@ def _get_qa_minimise_step(
     # must have f(x) > 0 at first eigenvalue
     assert step_length_error(first_b) > 0, "Wrong shape of error function"
     # Use scipy's root finder
-    res = root_scalar(step_length_error, method='brentq',
-                      bracket=[first_b, first_b - i*1.0])
+    res = root_scalar(
+        step_length_error,
+        method="brentq",
+        bracket=[first_b, first_b - i * 1.0],
+    )
     assert res.converged
 
     lmda_final = res.root
     shift_h = lmda_final * np.eye(n) - hessian
     inv_shift_h = np.linalg.inv(shift_h)
-    delta_s = - inv_shift_h @ gradient.reshape(-1, 1)
+    delta_s = -inv_shift_h @ gradient.reshape(-1, 1)
 
     return delta_s
-    # todo convert assert checks to exception and default to RFO scaling
-
-
+    # todo convert assert checks to exception and default to RFO scale
