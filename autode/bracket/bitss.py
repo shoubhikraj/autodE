@@ -15,8 +15,11 @@ class BinaryImagePair(TwoSidedImagePair):
     transition state search
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, alpha=10.0, beta=0.1, **kwargs):
         super().__init__(*args, **kwargs)
+
+        self._alpha = float(abs(alpha))
+        self._beta = float(abs(beta))
 
         self._k_eng = None  # energy constraint
         self._k_dist = None  # distance constraint
@@ -56,6 +59,7 @@ class BinaryImagePair(TwoSidedImagePair):
     def target_dist(self) -> Distance:
         """
         The target distance (d_i) set for BITSS
+
         Returns:
             (Distance)
         """
@@ -65,6 +69,7 @@ class BinaryImagePair(TwoSidedImagePair):
     def target_dist(self, value):
         """
         Set the target distance(d_i) used for BITSS
+
         Args:
             value (Distance|float):
         """
@@ -105,6 +110,55 @@ class BinaryImagePair(TwoSidedImagePair):
 
         self.left_coord = coords[: 3 * self.n_atoms]
         self.right_coord = coords[3 * self.n_atoms :]
+
+    def update_bitss_constraints(self) -> None:
+        """
+        Updates the BITSS constraint parameters k_eng and k_dist
+        """
+        self._check_bitss_params_grad_defined()
+
+        logger.info("Updating BITSS constraint parameters")
+
+        e_b = self._get_estimated_barrier()
+
+        # k_e  = alpha / (2 * E_B)
+        self._k_eng = self._alpha / e_b
+
+        # k_d = max(
+        # sqrt(|grad(E_1)|^2 + sqrt(|grad(E_2)|^2) / (2 * sqrt(2) * beta * d_i),
+        # E_B / (beta * d_i^2)
+        # )
+        # first, project the gradients
+        left_g_proj = abs(
+            np.dot(self.left_coord.g, self.dist_vec)
+            / np.linalg.norm(self.dist_vec)
+        )
+        right_g_proj = abs(
+            np.dot(self.right_coord.g, self.dist_vec)
+            / np.linalg.norm(self.dist_vec)
+        )
+        k_d_1 = np.sqrt(left_g_proj**2 + right_g_proj**2)
+        k_d_1 = k_d_1 / (2 * np.sqrt(2) * self._beta * self.target_dist)
+
+        k_d_2 = e_b / (self._beta * self.target_dist**2)
+
+        self._k_dist = max(k_d_1, k_d_2)
+
+        return None
+
+    def _get_estimated_barrier(self, n_images=10):
+        """
+        Get the current value of estimated barrier by running a linear
+        interpolation
+
+        Args:
+            n_images (int): Number of images to use for interpolation
+
+        Returns:
+            (float): Energy in Hartree
+        """
+        # todo
+        pass
 
     def bitss_energy(self) -> float:
         """
