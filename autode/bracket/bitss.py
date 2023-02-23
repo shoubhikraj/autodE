@@ -462,6 +462,7 @@ class BITSS:
             if self._microiter_converged:
                 break
             self.imgpair.update_bitss_constraints()
+            self._log_convergence()
 
         return True
 
@@ -492,6 +493,13 @@ class BITSS:
         self.imgpair.bitss_coords = new_coords
 
         return None
+
+    def _log_convergence(self):
+        logger.info(f"BITSS micro-iter # {self.imgpair.total_iters}: initial "
+                    f"species E={self.imgpair.left_coord.e}, final "
+                    f"species E={self.imgpair.right_coord.e}, RMS of BITSS"
+                    f" grad={self.imgpair.rms_bitss_grad()}, Distance="
+                    f"{self.imgpair.dist}")
 
 
 def _get_rfo_minimise_step(

@@ -496,12 +496,10 @@ class TwoSidedImagePair(BaseImagePair):
 
         return None
 
-    def update_both_img_molecular_hessian_by_calc(self, side: str) -> None:
+    def update_both_img_molecular_hessian_by_calc(self) -> None:
         """
         Updates the molecular hessian using supplied hess_method
         for both images in parallel (if possible)
-        Args:
-            side (str): 'left' or 'right'
         """
         assert self._hess_method is not None
         assert self._n_cores is not None
