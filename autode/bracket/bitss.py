@@ -299,7 +299,6 @@ class BinaryImagePair(TwoSidedImagePair):
         energy_terms = np.vstack((upper_part, lower_part))
 
         # distance terms
-        # grad(d) * 2 * k_d * (d - d_i)
         i_n = np.eye(self.n_atoms)
         a_mat = np.vstack((
             np.hstack((i_n, -i_n)),
@@ -309,6 +308,7 @@ class BinaryImagePair(TwoSidedImagePair):
         grad_d = float(1/self.dist) * (a_mat @ total_coord_col)
         hess_d = float(1/self.dist) * (a_mat - (grad_d @ grad_d.T))
         distance_term = 2 * self._k_dist * (grad_d @ grad_d.T)
+
         distance_term += (
             2 * float(self._k_dist) * float(self.dist)
             * float(1 - 2 * self.target_dist)
@@ -378,7 +378,7 @@ class BITSS:
         else:
             self._tr_upd = True
 
-        self._const_upd = int(abs(constr_update_freq))
+        self._constr_upd = int(abs(constr_update_freq))
 
     @property
     def converged(self) -> bool:
@@ -450,7 +450,7 @@ class BITSS:
         self.imgpair.update_bitss_constraints()
         micro_iter = 0
         # todo should I be calculating hessian after every macro-iter?
-        while True:
+        while not self._microiter_converged:
             micro_iter += 1
             if self._exceeded_maximum_iterations:
                 return False
@@ -461,10 +461,15 @@ class BITSS:
             self.imgpair.update_both_img_molecular_hessian_by_formula()
             if self._microiter_converged:
                 break
-            self.imgpair.update_bitss_constraints()
+            if micro_iter % self._constr_upd == 0:
+                self.imgpair.update_bitss_constraints()
             self._log_convergence()
 
         return True
+
+    def _update_trust_radius(self):
+        # todo
+        pass
 
     def _microiter_step(self) -> None:
         hess = self.imgpair.bitss_hess()
