@@ -1,9 +1,12 @@
 import numpy as np
 
-from autode.bracket.imagepair import TwoSidedImagePair
+from autode.bracket.imagepair import (TwoSidedImagePair,
+                                      _calculate_energy_for_species)
 from autode.values import Distance, GradientRMS
 from autode.opt.coordinates import OptCoordinates, CartesianCoordinates
+from autode.neb import NEB
 from autode.exceptions import OptimiserStepError
+from autode.utils import ProcessPool
 from autode.log import logger
 
 import autode.species
@@ -98,6 +101,14 @@ class BinaryImagePair(TwoSidedImagePair):
 
     @bitss_coords.setter
     def bitss_coords(self, value):
+        """
+        Sets the bitss coordinates. Expects concatenated
+        coordinates of left and right images and then sets
+        the coordinates (which updates the species)
+
+        Args:
+            value (np.ndarray|OptCoordinates):
+        """
         if isinstance(value, OptCoordinates):
             coords = value.to("ang").flatten()
         elif isinstance(value, np.ndarray):
@@ -146,10 +157,10 @@ class BinaryImagePair(TwoSidedImagePair):
 
         return None
 
-    def _get_estimated_barrier(self, n_images=10):
+    def _get_estimated_barrier(self, n_images=8) -> float:
         """
         Get the current value of estimated barrier by running a linear
-        interpolation
+        interpolation using the engrad method
 
         Args:
             n_images (int): Number of images to use for interpolation
@@ -157,8 +168,34 @@ class BinaryImagePair(TwoSidedImagePair):
         Returns:
             (float): Energy in Hartree
         """
-        # todo
-        pass
+        logger.info(
+            f"Using a linear interpolation of {n_images} to estimate the"
+            f"current barrier of the BITSS image pair"
+        )
+
+        lin_path = LinearInterp(
+            self._left_image.copy(), self._right_image.copy(), num=n_images
+        )
+        n_cores_pp = max(self._n_cores // n_images, 1)
+        n_workers = n_images if n_images < self._n_cores else self._n_cores
+
+        # only need to calculate the middle images
+        with ProcessPool(max_workers=n_workers) as pool:
+            jobs = [pool.submit(
+                _calculate_energy_for_species,
+                species=image.species.new_species(name=f"img{idx}"),
+                method=self._engrad_method,
+                n_cores=n_cores_pp,
+            ) for idx, image in enumerate(lin_path.images)[1:-1]
+            ]
+
+            path_energies = [job.result() for job in jobs]
+
+        # E_B = max(interpolated E's) - avg(reactant, product)
+        e_b = (
+            max(path_energies) - (self.left_coord.e + self.right_coord.e)/2
+        )
+        return float(e_b)
 
     def bitss_energy(self) -> float:
         """
@@ -263,9 +300,39 @@ class BinaryImagePair(TwoSidedImagePair):
 
         # distance terms
         # grad(d) * 2 * k_d * (d - d_i)
+        i_n = np.eye(self.n_atoms)
+        a_mat = np.vstack((
+            np.hstack((i_n, -i_n)),
+            np.hstack((-i_n, i_n))
+        ))
         total_coord_col = self.bitss_coords.reshape(-1, 1)
-        # todo finish
-        # todo do we really need Hessians?
+        grad_d = float(1/self.dist) * (a_mat @ total_coord_col)
+        hess_d = float(1/self.dist) * (a_mat - (grad_d @ grad_d.T))
+        distance_term = 2 * self._k_dist * (grad_d @ grad_d.T)
+        distance_term += (
+            2 * float(self._k_dist) * float(self.dist)
+            * float(1 - 2 * self.target_dist)
+            * hess_d
+        )
+        # put together distance and energy terms
+        total_hess = energy_terms + distance_term
+
+        return total_hess
+
+
+class LinearInterp(NEB):
+    """
+    Generates a linear interpolation with a fixed number of
+    images between the geometries of two species
+    """
+    # subclasses NEB to simply skip IDPP relaxation
+    def _init_from_end_points(self, initial, final) -> None:
+        """Only interpolation, no IDPP"""
+        self.images[0].species = initial
+        self.images[-1].species = final
+        self.interpolate_geometries()
+
+        return None
 
 
 class BITSS:
@@ -289,6 +356,7 @@ class BITSS:
         init_trust: Distance = Distance(0.05, "ang"),
         max_trust: Distance = Distance(0.2, "ang"),
         min_trust: Distance = Distance(0.01, "ang"),
+        constr_update_freq: int = 25,
     ):
         self.imgpair = BinaryImagePair(initial_species, final_species)
         self._dist_tol = Distance(dist_tol, "ang")
@@ -310,6 +378,8 @@ class BITSS:
         else:
             self._tr_upd = True
 
+        self._const_upd = int(abs(constr_update_freq))
+
     @property
     def converged(self) -> bool:
         if self.imgpair.dist < self._dist_tol:
@@ -322,8 +392,6 @@ class BITSS:
         return True if self.imgpair.bitss_iters > self._maxiter else False
 
     def calculate(self):
-        self.imgpair.update_one_img_molecular_engrad("left")
-        self.imgpair.update_one_img_molecular_engrad("right")
 
         while not self.converged:
             self._reduce_target_dist()
@@ -344,6 +412,9 @@ class BITSS:
         self.imgpair.target_dist = (
             1 - self._reduction_fac
         ) * self.imgpair.dist
+        logger.info(f"BITSS macro-iteration: Setting target distance"
+                    f"to {self.imgpair.target_dist:.4f}; Current distance ="
+                    f" {self.imgpair.dist}")
         return None
 
     @property
@@ -370,8 +441,17 @@ class BITSS:
         """
         Minimises the BITSS potential with micro-iterations of
         a hybrid RFO/QA method
+
+        Returns:
+            (bool): True if micro-iterations converged otherwise False
         """
-        while not self._microiter_converged:
+        self.imgpair.update_both_img_molecular_engrad()
+        self.imgpair.update_both_img_molecular_hessian_by_calc()
+        self.imgpair.update_bitss_constraints()
+        micro_iter = 0
+        # todo should I be calculating hessian after every macro-iter?
+        while True:
+            micro_iter += 1
             if self._exceeded_maximum_iterations:
                 return False
             self._microiter_step()
@@ -379,7 +459,9 @@ class BITSS:
             # todo check stability is it better to update molecular hessian
             # or just the bitss hessian
             self.imgpair.update_both_img_molecular_hessian_by_formula()
-            # todo need to update the constraints
+            if self._microiter_converged:
+                break
+            self.imgpair.update_bitss_constraints()
 
         return True
 
