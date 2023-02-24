@@ -20,7 +20,7 @@ class BinaryImagePair(TwoSidedImagePair):
     transition state search
     """
 
-    def __init__(self, *args, alpha=10.0, beta=0.1, **kwargs):
+    def __init__(self, *args, alpha=10.0, beta=0.01, **kwargs):
         super().__init__(*args, **kwargs)
 
         self._alpha = float(abs(alpha))
@@ -129,7 +129,7 @@ class BinaryImagePair(TwoSidedImagePair):
         Updates the BITSS constraint parameters k_eng and k_dist
         """
 
-        logger.info("Updating BITSS constraint parameters")
+        print("Updating BITSS constraint parameters")
 
         e_b = self._get_estimated_barrier()
 
@@ -155,6 +155,8 @@ class BinaryImagePair(TwoSidedImagePair):
         k_d_2 = e_b / (self._beta * self.target_dist**2)
 
         self._k_dist = max(k_d_1, k_d_2)
+
+        print(f"updated constraints: {self._k_dist}, {self._k_eng}")
 
         return None
 
@@ -196,6 +198,11 @@ class BinaryImagePair(TwoSidedImagePair):
 
         # E_B = max(interpolated E's) - avg(reactant, product)
         e_b = max(path_energies) - (self.left_coord.e + self.right_coord.e) / 2
+
+        if e_b < 0:
+            raise RuntimeError("Estimated barrier is negative in BITSS, lost"
+                               " the reaction path")
+
         return float(e_b)
 
     def bitss_energy(self) -> float:
@@ -354,7 +361,7 @@ class BITSS:
         dist_tol: Distance = Distance(1.0, "ang"),
         reduction_factor: float = 0.5,
         gtol: GradientRMS = GradientRMS(5.0e-4, "ha/ang"),
-        init_trust: Distance = Distance(0.05, "ang"),
+        init_trust: Distance = Distance(0.08, "ang"),
         max_trust: Distance = Distance(0.2, "ang"),
         min_trust: Distance = Distance(0.01, "ang"),
         constr_update_freq: int = 25,
@@ -371,7 +378,7 @@ class BITSS:
         self._trust = float(Distance(init_trust, "ang"))
         self._max_tr = float(Distance(max_trust, "ang"))
         self._min_tr = float(Distance(min_trust, "ang"))
-
+        # todo add alpha and beta
         # todo doc if negative turn off trust update
         if self._trust < 0:
             self._tr_upd = False
@@ -409,10 +416,10 @@ class BITSS:
         while not self.converged:
             self._reduce_target_dist()
             if not self._bitss_minimise():
-                logger.warning("Exceeded maximum num of iterations in BITSS")
+                print("Exceeded maximum num of iterations in BITSS")
                 break
 
-        logger.info(
+        print(
             f"BITSS optimisation finished in "
             f"{self.imgpair.total_iters} geometry iteration steps."
         )
@@ -425,10 +432,10 @@ class BITSS:
         self.imgpair.target_dist = (
             1 - self._reduction_fac
         ) * self.imgpair.dist
-        logger.info(
+        print(
             f"BITSS macro-iteration: Setting target distance"
             f"to {self.imgpair.target_dist:.4f}; Current distance ="
-            f" {self.imgpair.dist}"
+            f" {self.imgpair.dist:.4f}"
         )
         return None
 
@@ -496,17 +503,18 @@ class BITSS:
         # check if step is in trust radius
         if step_size <= self._trust:
             # take an RFO step
-            logger.info("Taking a pure RFO step")
+            print("Taking a pure RFO step")
             step = rfo_step
         else:
             # try a QA step within trust radius
             try:
-                logger.info("Taking a QA step within trust radius")
                 step = _get_qa_minimise_step(hess, grad, self._trust)
+                raise OptimiserStepError
+                print("Taking a QA step within trust radius")
 
             except OptimiserStepError:
                 # if that didn't work, simply scale the rfo step
-                logger.info("Taking a scaled RFO step")
+                print("Taking a scaled RFO step")
                 step = rfo_step * self._trust / step_size
 
         new_coords = self.imgpair.bitss_coords + step
@@ -515,12 +523,12 @@ class BITSS:
         return None
 
     def _log_convergence(self):
-        logger.info(
+        print(
             f"BITSS micro-iter # {self.imgpair.total_iters}: initial "
-            f"species E={self.imgpair.left_coord.e}, final "
-            f"species E={self.imgpair.right_coord.e}, RMS of BITSS"
-            f" grad={self.imgpair.rms_bitss_grad()}, Distance="
-            f"{self.imgpair.dist}"
+            f"species E={self.imgpair.left_coord.e:.6f}, final "
+            f"species E={self.imgpair.right_coord.e:.6f}, RMS of BITSS"
+            f" grad={self.imgpair.rms_bitss_grad():.5f}, Distance="
+            f"{self.imgpair.dist:.4f}"
         )
 
 
@@ -610,7 +618,7 @@ def _get_qa_minimise_step(
         step_length_error,
         method="brentq",
         bracket=[first_b - l_minus, first_b - l_plus],
-        maxiter=500,
+        maxiter=200,
     )
 
     if not res.converged:
