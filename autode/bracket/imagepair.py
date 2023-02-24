@@ -447,12 +447,10 @@ class TwoSidedImagePair(BaseImagePair):
     images at the same time
     """
 
-    def update_both_img_molecular_engrad(self):
+    def update_both_img_mol_engrad(self):
         """
         Update the molecular energy and gradient using the supplied
         engrad_method for both images in parallel (if possible)
-        Args:
-            side (str): 'left' or 'right'
         """
         assert self._engrad_method is not None
         assert self._n_cores is not None
@@ -462,8 +460,8 @@ class TwoSidedImagePair(BaseImagePair):
         )
 
         if self._n_cores == 1:  # no need for parallel
-            self.update_one_img_molecular_engrad("left")
-            self.update_one_img_molecular_engrad("right")
+            self.update_one_img_mol_engrad("left")
+            self.update_one_img_mol_engrad("right")
             return None
 
         n_cores_per_pp = self._n_cores // 2
@@ -484,20 +482,16 @@ class TwoSidedImagePair(BaseImagePair):
         right_en, right_grad = right_en.to("Ha"), right_grad.to("Ha/ang")
         left_en, left_grad = left_en.to("Ha"), left_grad.to("Ha/ang")
 
-        # update both species and coord
-        self._left_image.energy = left_en
-        self._left_image.gradient = left_grad
+        # update both coords
         self.left_coord.e = left_en
         self.left_coord.update_g_from_cart_g(left_grad)
 
-        self._right_image.energy = right_en
-        self._right_image.gradient = right_grad
         self.right_coord.e = right_en
         self.right_coord.update_g_from_cart_g(right_grad)
 
         return None
 
-    def update_both_img_molecular_hessian_by_calc(self) -> None:
+    def update_both_img_mol_hess_by_calc(self) -> None:
         """
         Updates the molecular hessian using supplied hess_method
         for both images in parallel (if possible)
@@ -510,8 +504,8 @@ class TwoSidedImagePair(BaseImagePair):
         )
 
         if self._n_cores == 1:
-            self.update_one_img_molecular_hessian_by_calc("left")
-            self.update_one_img_molecular_hessian_by_calc("right")
+            self.update_one_img_mol_hess_by_calc("left")
+            self.update_one_img_mol_hess_by_calc("right")
             return None
 
         n_cores_per_pp = self._n_cores // 2
@@ -532,16 +526,17 @@ class TwoSidedImagePair(BaseImagePair):
         left_hess = left_hess.to("Ha/ang^2")
         right_hess = right_hess.to("Ha/ang^2")
 
-        # update both species and coordinates
-        self._left_image.hessian = left_hess
+        # update both coords
         self.left_coord.update_h_from_cart_h(left_hess)
-
-        self._right_image.hessian = right_hess
         self.right_coord.update_h_from_cart_h(right_hess)
 
         return None
 
-    def update_both_img_molecular_hessian_by_formula(self):
+    def update_both_img_mol_hess_by_formula(self) -> None:
+        """
+        Updates the molecular hessians of both images by using an
+        update formula
+        """
         # simply call the functions for each side
-        self.update_one_img_molecular_hessian_by_formula("left")
-        self.update_one_img_molecular_hessian_by_formula("right")
+        self.update_one_img_mol_hess_by_formula("left")
+        self.update_one_img_mol_hess_by_formula("right")

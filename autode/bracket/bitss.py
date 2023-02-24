@@ -200,8 +200,10 @@ class BinaryImagePair(TwoSidedImagePair):
         e_b = max(path_energies) - (self.left_coord.e + self.right_coord.e) / 2
 
         if e_b < 0:
-            raise RuntimeError("Estimated barrier is negative in BITSS, lost"
-                               " the reaction path")
+            raise RuntimeError(
+                "Estimated barrier is negative in BITSS, lost"
+                " the reaction path"
+            )
 
         return float(e_b)
 
@@ -467,8 +469,8 @@ class BITSS:
         Returns:
             (bool): True if micro-iterations converged otherwise False
         """
-        self.imgpair.update_both_img_molecular_engrad()
-        self.imgpair.update_both_img_molecular_hessian_by_calc()
+        self.imgpair.update_both_img_mol_engrad()
+        self.imgpair.update_both_img_mol_hess_by_calc()
         self.imgpair.update_bitss_constraints()
         micro_iter = 0
         # todo should I be calculating hessian after every macro-iter?
@@ -477,10 +479,10 @@ class BITSS:
             if self._exceeded_maximum_iterations:
                 return False
             self._microiter_step()
-            self.imgpair.update_both_img_molecular_engrad()
+            self.imgpair.update_both_img_mol_engrad()
             # todo check stability is it better to update molecular hessian
             # or just the bitss hessian
-            self.imgpair.update_both_img_molecular_hessian_by_formula()
+            self.imgpair.update_both_img_mol_hess_by_formula()
             if self._microiter_converged:
                 break
             if micro_iter % self._constr_upd == 0:
