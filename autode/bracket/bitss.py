@@ -98,7 +98,7 @@ class BinaryImagePair(TwoSidedImagePair):
             (OptCoordinates):
         """
         return CartesianCoordinates(
-            np.concatenate((self.left_coord, self.right_coord))
+            np.concatenate((self.left_coord, self.right_coord), axis=None)
         )
 
     @bitss_coords.setter
@@ -189,7 +189,7 @@ class BinaryImagePair(TwoSidedImagePair):
                     method=self._engrad_method,
                     n_cores=n_cores_pp,
                 )
-                for idx, image in enumerate(lin_path.images)[1:-1]
+                for idx, image in list(enumerate(lin_path.images))[1:-1]
             ]
 
             path_energies = [job.result() for job in jobs]
@@ -249,7 +249,7 @@ class BinaryImagePair(TwoSidedImagePair):
 
     def rms_bitss_grad(self) -> GradientRMS:
         grad = self.bitss_grad()
-        rms_g = np.sqrt(np.average(np.mean(grad)))
+        rms_g = np.sqrt(np.average(np.square(grad)))
         return GradientRMS(rms_g, units="ha/ang")
 
     def bitss_hess(self):
@@ -300,7 +300,7 @@ class BinaryImagePair(TwoSidedImagePair):
         energy_terms = np.vstack((upper_part, lower_part))
 
         # distance terms
-        i_n = np.eye(self.n_atoms)
+        i_n = np.eye(self.n_atoms * 3)
         a_mat = np.vstack((np.hstack((i_n, -i_n)), np.hstack((-i_n, i_n))))
         total_coord_col = self.bitss_coords.reshape(-1, 1)
         grad_d = float(1 / self.dist) * (a_mat @ total_coord_col)
@@ -596,12 +596,12 @@ def _get_qa_minimise_step(
     else:  # if loop didn't break
         raise OptimiserStepError("Unable to find lambda where error > 0")
 
-    l_minus = l_plus - 1.0
+    l_minus = l_plus + 1.0
     for _ in range(1000):
         err = step_length_error(first_b - l_minus)
         if err < 0.0:  # found location where f(x) < 0
             break
-        l_minus -= 1.0  # reduce by 1.0
+        l_minus += 1.0  # reduce lambda by 1.0
     else:
         raise OptimiserStepError("Unable to find lambda where error < 0")
 
@@ -609,7 +609,7 @@ def _get_qa_minimise_step(
     res = root_scalar(
         step_length_error,
         method="brentq",
-        bracket=[l_minus, l_plus],
+        bracket=[first_b - l_minus, first_b - l_plus],
         maxiter=500,
     )
 
@@ -617,7 +617,7 @@ def _get_qa_minimise_step(
         raise OptimiserStepError("Unable to find root of error function")
 
     lmda_final = res.root
-    shift_h = lmda_final * np.eye(n) - hessian
+    shift_h = hessian - lmda_final * np.eye(n)
     inv_shift_h = np.linalg.inv(shift_h)
     delta_s = -inv_shift_h @ gradient.reshape(-1, 1)
 
