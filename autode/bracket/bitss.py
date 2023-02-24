@@ -1,7 +1,9 @@
 import numpy as np
 
-from autode.bracket.imagepair import (TwoSidedImagePair,
-                                      _calculate_energy_for_species)
+from autode.bracket.imagepair import (
+    TwoSidedImagePair,
+    _calculate_energy_for_species,
+)
 from autode.values import Distance, GradientRMS
 from autode.opt.coordinates import OptCoordinates, CartesianCoordinates
 from autode.neb import NEB
@@ -126,7 +128,6 @@ class BinaryImagePair(TwoSidedImagePair):
         """
         Updates the BITSS constraint parameters k_eng and k_dist
         """
-        self._check_bitss_params_grad_defined()
 
         logger.info("Updating BITSS constraint parameters")
 
@@ -181,20 +182,20 @@ class BinaryImagePair(TwoSidedImagePair):
 
         # only need to calculate the middle images
         with ProcessPool(max_workers=n_workers) as pool:
-            jobs = [pool.submit(
-                _calculate_energy_for_species,
-                species=image.species.new_species(name=f"img{idx}"),
-                method=self._engrad_method,
-                n_cores=n_cores_pp,
-            ) for idx, image in enumerate(lin_path.images)[1:-1]
+            jobs = [
+                pool.submit(
+                    _calculate_energy_for_species,
+                    species=image.species.new_species(name=f"img{idx}"),
+                    method=self._engrad_method,
+                    n_cores=n_cores_pp,
+                )
+                for idx, image in enumerate(lin_path.images)[1:-1]
             ]
 
             path_energies = [job.result() for job in jobs]
 
         # E_B = max(interpolated E's) - avg(reactant, product)
-        e_b = (
-            max(path_energies) - (self.left_coord.e + self.right_coord.e)/2
-        )
+        e_b = max(path_energies) - (self.left_coord.e + self.right_coord.e) / 2
         return float(e_b)
 
     def bitss_energy(self) -> float:
@@ -300,17 +301,16 @@ class BinaryImagePair(TwoSidedImagePair):
 
         # distance terms
         i_n = np.eye(self.n_atoms)
-        a_mat = np.vstack((
-            np.hstack((i_n, -i_n)),
-            np.hstack((-i_n, i_n))
-        ))
+        a_mat = np.vstack((np.hstack((i_n, -i_n)), np.hstack((-i_n, i_n))))
         total_coord_col = self.bitss_coords.reshape(-1, 1)
-        grad_d = float(1/self.dist) * (a_mat @ total_coord_col)
-        hess_d = float(1/self.dist) * (a_mat - (grad_d @ grad_d.T))
+        grad_d = float(1 / self.dist) * (a_mat @ total_coord_col)
+        hess_d = float(1 / self.dist) * (a_mat - (grad_d @ grad_d.T))
         distance_term = 2 * self._k_dist * (grad_d @ grad_d.T)
 
         distance_term += (
-            2 * float(self._k_dist) * float(self.dist)
+            2
+            * float(self._k_dist)
+            * float(self.dist)
             * float(1 - 2 * self.target_dist)
             * hess_d
         )
@@ -325,6 +325,7 @@ class LinearInterp(NEB):
     Generates a linear interpolation with a fixed number of
     images between the geometries of two species
     """
+
     # subclasses NEB to simply skip IDPP relaxation
     def _init_from_end_points(self, initial, final) -> None:
         """Only interpolation, no IDPP"""
@@ -391,7 +392,19 @@ class BITSS:
     def _exceeded_maximum_iterations(self) -> bool:
         return True if self.imgpair.bitss_iters > self._maxiter else False
 
-    def calculate(self):
+    def calculate(
+        self,
+        engrad_method: "autode.wrappers.methods.Method",
+        hess_method: "autode.wrappers.methods.Method",
+        n_cores: int,
+    ):
+
+        self.imgpair.set_method_and_n_cores(
+            engrad_method=engrad_method,
+            hess_method=hess_method,
+            n_cores=n_cores,
+        )
+        logger.info("Starting BITSS optimisation to find transition state")
 
         while not self.converged:
             self._reduce_target_dist()
@@ -412,9 +425,11 @@ class BITSS:
         self.imgpair.target_dist = (
             1 - self._reduction_fac
         ) * self.imgpair.dist
-        logger.info(f"BITSS macro-iteration: Setting target distance"
-                    f"to {self.imgpair.target_dist:.4f}; Current distance ="
-                    f" {self.imgpair.dist}")
+        logger.info(
+            f"BITSS macro-iteration: Setting target distance"
+            f"to {self.imgpair.target_dist:.4f}; Current distance ="
+            f" {self.imgpair.dist}"
+        )
         return None
 
     @property
@@ -500,11 +515,13 @@ class BITSS:
         return None
 
     def _log_convergence(self):
-        logger.info(f"BITSS micro-iter # {self.imgpair.total_iters}: initial "
-                    f"species E={self.imgpair.left_coord.e}, final "
-                    f"species E={self.imgpair.right_coord.e}, RMS of BITSS"
-                    f" grad={self.imgpair.rms_bitss_grad()}, Distance="
-                    f"{self.imgpair.dist}")
+        logger.info(
+            f"BITSS micro-iter # {self.imgpair.total_iters}: initial "
+            f"species E={self.imgpair.left_coord.e}, final "
+            f"species E={self.imgpair.right_coord.e}, RMS of BITSS"
+            f" grad={self.imgpair.rms_bitss_grad()}, Distance="
+            f"{self.imgpair.dist}"
+        )
 
 
 def _get_rfo_minimise_step(
