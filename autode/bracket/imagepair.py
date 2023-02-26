@@ -13,6 +13,7 @@ from autode.opt.coordinates import CartesianCoordinates, OptCoordinates
 from autode.opt.optimisers.hessian_update import BofillUpdate
 from autode.opt.optimisers.base import _OptimiserHistory
 from autode.utils import work_in_tmp_dir, ProcessPool
+from autode.exceptions import CalculationException
 from autode.log import logger
 
 import autode.species.species
