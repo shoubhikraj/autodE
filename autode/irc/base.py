@@ -4,8 +4,8 @@ Base classes for IRC calculation
 from abc import ABC, abstractmethod
 from typing import Optional, TYPE_CHECKING
 import numpy as np
-from autode.values import GradientRMS
-from autode.opt.coordinates import OptCoordinates
+from autode.values import GradientRMS, MWDistance
+from autode.opt.coordinates import OptCoordinates, MWCartesianCoordinates
 from autode.opt.optimisers.base import OptimiserHistory
 from autode.opt.optimisers.hessian_update import BofillUpdate
 from autode.exceptions import CalculationException
@@ -22,6 +22,7 @@ class BaseIntegrator(ABC):
     def __init__(
         self,
         max_points: int,
+        step_size: float,
         gtol: GradientRMS = GradientRMS(1e-3, "ha/ang"),
         read_init_hess: bool = False,
         recalc_hess: Optional[int] = None,
@@ -263,3 +264,52 @@ class BaseIntegrator(ABC):
 
         coords.h = updater.updated_h
         return None
+
+
+class MWIntegrator(BaseIntegrator, ABC):
+    """
+    Reaction Coordinate integrated in mass-weighted Cartesian
+    coordinates, which is usually called "Intrinsic Reaction
+    Coordinate" or IRC.
+    """
+
+    def __init__(
+        self,
+        max_points: int,
+        step_size: MWDistance,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(max_points, step_size, *args, **kwargs)
+        self._step_size = MWDistance(step_size, "ang amu^1/2")
+
+    def _initialise_run(self):
+        logger.info("Initialising IRC integration run")
+        if self._species is None:
+            raise RuntimeError("Species must be defined before IRC run")
+        self._coords = MWCartesianCoordinates.from_species(self._species)
+
+        if self._should_init_hess:
+            self._update_hessian_gradient_and_energy_for(self._coords)
+        else:
+            if self._species.hessian is None:
+                raise RuntimeError(
+                    "Requested reading initial Hessian, but species does"
+                    " not have any calculated hessian data"
+                )
+            self._coords.update_h_from_cart_h(self._species.hessian)
+            self._update_gradient_and_energy_for(self._coords)
+
+        eigvals = np.linalg.eigvalsh(self._coords.h)
+        if eigvals[0] > 0 and self._direction != "downhill":
+            raise RuntimeError(
+                "For IRC runs starting from TS, there must be"
+                " at least one negative frequency"
+            )
+
+        if self._g_norm > self._gtol and self._direction != "downhill":
+            raise RuntimeError(
+                "IRC run is starting from the transition state but "
+                f"gradient norm is greater then gtol: {self._gtol:.3f}."
+                f" Transition state geometry is likely not converged!"
+            )
