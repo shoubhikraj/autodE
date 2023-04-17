@@ -9,10 +9,13 @@ from autode.opt.coordinates import OptCoordinates
 from autode.opt.optimisers.base import OptimiserHistory
 from autode.opt.optimisers.hessian_update import BofillUpdate
 from autode.exceptions import CalculationException
+from autode.log import logger
 
 if TYPE_CHECKING:
     from autode.species.species import Species
     from autode.wrappers.methods import Method
+
+_flush_old_hessians = True
 
 
 class BaseIntegrator(ABC):
@@ -55,21 +58,36 @@ class BaseIntegrator(ABC):
         have been integrated, or (2) the gradient has decreased below
         the requested tolerance
         """
-        if self.n_points >= self._maxpoints and self._rms_g_norm < self._gtol:
+        if self.n_points >= self._maxpoints or self._g_norm < self._gtol:
             return True
         else:
             return False
 
     @property
-    def _rms_g_norm(self):
-        return np.sqrt(np.average(np.square(self._coords.g)))
+    def _g_norm(self):
+        """
+        RMS(∇E) of the current Cartesian gradient
+
+        Returns:
+            (autode.values.GradientRMS): Gradient norm. Infinity if the
+                                          gradient is not defined
+        """
+        if self._coords is None:
+            logger.warning("Had no coordinates - cannot determine ||∇E||")
+            return GradientRMS(np.inf)
+
+        if self._coords.g is None:
+            return GradientRMS(np.inf)
+
+        cart_g = self._coords.to("cart", pass_tensors=True)
+        return GradientRMS(np.sqrt(np.average(np.square(cart_g))))
 
     @abstractmethod
     def _initialise_run(self):
         pass
 
     @abstractmethod
-    def _first_step(self):
+    def _first_step(self) -> OptCoordinates:
         pass
 
     @abstractmethod
@@ -93,18 +111,31 @@ class BaseIntegrator(ABC):
         else:
             raise ValueError
 
+        if _flush_old_hessians:
+            old_coords = self._history[-3]
+            if old_coords is not None:
+                old_coords.h = None
+
     @property
     def n_points(self):
         """Number of points integrated so far"""
         return len(self._history) - 1
 
-    def run(self, species, method):
+    def run(self, species: "Species", method: "Method"):
         self._initialise_species_and_method(species, method)
         self._initialise_run()
 
+        logger.info(
+            f"Integrating a maximum of {self._maxpoints} points"
+            f" in {self._direction} direction"
+        )
+
         self._first_step()
         while not self.completed:
-            pred_coords = self._predictor_step()
+            if self.n_points == 1 and self._direction != "downhill":
+                pred_coords = self._first_step()
+            else:
+                pred_coords = self._predictor_step()
             if (
                 self._recalc_hess_freq is not None
                 and self.n_points % self._recalc_hess_freq == 0
@@ -114,7 +145,11 @@ class BaseIntegrator(ABC):
                 self._update_gradient_and_energy_for(pred_coords)
                 self._update_hessian_by_formula_for(pred_coords, self._coords)
             self._corrector_step(pred_coords)
-            # maxiter?
+
+        logger.info(
+            f"Finished integrating IRC pathway: generated"
+            f" {self.n_points} on the reaction path"
+        )
 
     def _initialise_species_and_method(self, species, method):
 
@@ -173,7 +208,12 @@ class BaseIntegrator(ABC):
 
         coords.update_g_from_cart_g(self._species.gradient)
         coords.e = self._species.energy
-        # todo raise calculation exceptions
+
+        if self._species.gradient is None:
+            raise CalculationException(
+                "Calculation failed to calculate a gradient. "
+                "Cannot continue!"
+            )
 
         return None
 
@@ -193,6 +233,12 @@ class BaseIntegrator(ABC):
         hess_calc.run()
         hess_calc.clean_up(force=True, everything=True)
 
+        if self._species.hessian is None or self._species.gradient is None:
+            raise CalculationException(
+                "Calculation failed to calculate a hessian/gradient. "
+                "Cannot continue!"
+            )
+
         coords.update_h_from_cart_h(self._species.hessian)
         coords.update_g_from_cart_g(self._species.gradient)
         coords.e = self._species.energy
@@ -200,7 +246,7 @@ class BaseIntegrator(ABC):
         return None
 
     def _update_hessian_by_formula_for(
-        self, coords: OptCoordinates, old_coords
+        self, coords: OptCoordinates, old_coords: OptCoordinates
     ):
         """
         Update Hessian by using a formula instead of calculation
@@ -216,3 +262,4 @@ class BaseIntegrator(ABC):
         )
 
         coords.h = updater.updated_h
+        return None

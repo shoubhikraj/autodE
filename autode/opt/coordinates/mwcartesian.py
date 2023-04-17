@@ -109,8 +109,12 @@ class MWCartesianCoordinates(OptCoordinates):
             cart_coords = CartesianCoordinates(self / self.sqrt_masses)
             if pass_tensors:
                 mass_matrix = np.outer(self.sqrt_masses, self.sqrt_masses)
-                cart_coords.g = self.g * self.sqrt_masses
-                cart_coords.h = self.h * mass_matrix
+                cart_coords.g = (
+                    self.g * self.sqrt_masses if self.g is not None else None
+                )
+                cart_coords.h = (
+                    self.h * mass_matrix if self.h is not None else None
+                )
             return cart_coords
 
         else:
