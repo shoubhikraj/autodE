@@ -26,22 +26,13 @@ class IMKIntegrator(MWIntegrator):
 
         self._elbow = Angle(elbow_thresh, units="degrees").to("radians")
 
-    def _first_step(self) -> MWCartesianCoordinates:
-        # todo put this in base
-        # todo implement energy represented displacement
-        eigvals, eigvecs = np.linalg.eigh(self._coords.h)
-        ts_eigvec = eigvecs[:, 0]
+    def _predictor_step(self) -> MWCartesianCoordinates:
 
-        scaled_ts_vec = ts_eigvec / np.linalg.norm(ts_eigvec)
-        largest_comp = np.argmax(np.abs(scaled_ts_vec))
-        if scaled_ts_vec[largest_comp] > 0:
-            pass
-        else:
-            scaled_ts_vec = -scaled_ts_vec
-        step = self._step_size * scaled_ts_vec
-        if self._direction == "forward":
-            pass
-        else:
-            step = -step
+        # IMK predictor step is a simple gradient step (normalized)
+        g_hat = self._coords.g / np.linalg.norm(self._coords.g)
+        new_coords = self._coords + self._step_size * g_hat
 
-        return self._coords + step
+        return new_coords
+
+    def _corrector_step(self, coords: MWCartesianCoordinates):
+        pass

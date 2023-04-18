@@ -2,9 +2,9 @@
 Base classes for IRC calculation
 """
 from abc import ABC, abstractmethod
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Union, TYPE_CHECKING
 import numpy as np
-from autode.values import GradientRMS, MWDistance
+from autode.values import GradientRMS, MWDistance, Energy
 from autode.opt.coordinates import OptCoordinates, MWCartesianCoordinates
 from autode.opt.optimisers.base import OptimiserHistory
 from autode.opt.optimisers.hessian_update import BofillUpdate
@@ -19,6 +19,9 @@ _flush_old_hessians = True
 
 
 class BaseIntegrator(ABC):
+    """
+    Base class for reaction coordinate integrators
+    """
     def __init__(
         self,
         max_points: int,
@@ -83,31 +86,72 @@ class BaseIntegrator(ABC):
         cart_g = self._coords.to("cart", pass_tensors=True)
         return GradientRMS(np.sqrt(np.average(np.square(cart_g))))
 
+    @property
+    def _last_energy_change(self):
+        if self.n_points > 1:
+            delta_e = self._history.final.e - self._history.penultimate.e
+            return Energy(delta_e, units="Ha")
+        else:
+            return Energy(np.inf)
+
     @abstractmethod
     def _initialise_run(self):
         pass
 
     @abstractmethod
-    def _first_step(self) -> OptCoordinates:
+    def _first_step(self) -> None:
+        """
+        First step off the saddle point (TS), not used when downhill
+        reaction coordinate integration is requested
+        """
         pass
 
     @abstractmethod
     def _predictor_step(self) -> OptCoordinates:
-        pass
+        """
+        Predictor that uses information from last coordinates to
+        predict the next point in the reaction coordinate. This
+        function must *not* set new coordinates
+
+        Returns:
+            (OptCoordinates): The predicted point
+        """
 
     @abstractmethod
-    def _corrector_step(self, coords: OptCoordinates):
-        pass
+    def _corrector_step(self, coords: OptCoordinates) -> None:
+        """
+        Takes the predicted point from the predictor step and then
+        corrects the step so that it lies more closely in the
+        reaction path. The corrected point is set as the current
+        coordinates in history
+
+        Args:
+            coords: Predicted coordinates
+        """
 
     @property
     def _coords(self) -> Optional[OptCoordinates]:
+        """
+        Current set of coordinates in this integrator
+
+        Returns:
+            (OptCoordinates):
+        """
         if len(self._history) == 0:
             return None
         return self._history[-1]
 
     @_coords.setter
     def _coords(self, value):
-        if isinstance(value, OptCoordinates):
+        """
+        Set a new set of coordinates for this integrator
+
+        Args:
+            value (OptCoordinates): new set of coordinates
+        """
+        if value is None:
+            return
+        elif isinstance(value, OptCoordinates):
             self._history.append(value.copy())
         else:
             raise ValueError
@@ -122,7 +166,15 @@ class BaseIntegrator(ABC):
         """Number of points integrated so far"""
         return len(self._history) - 1
 
-    def run(self, species: "Species", method: "Method"):
+    def run(self, species: "Species", method: "Method") -> None:
+        """
+        Run a reaction coordinate integration for the species with
+        the supplied method
+
+        Args:
+            species (Species):
+            method (Method):
+        """
         self._initialise_species_and_method(species, method)
         self._initialise_run()
 
@@ -131,12 +183,11 @@ class BaseIntegrator(ABC):
             f" in {self._direction} direction"
         )
 
-        self._first_step()
+        if self._direction != "downhill":
+            self._first_step()
+
         while not self.completed:
-            if self.n_points == 1 and self._direction != "downhill":
-                pred_coords = self._first_step()
-            else:
-                pred_coords = self._predictor_step()
+            pred_coords = self._predictor_step()
             if (
                 self._recalc_hess_freq is not None
                 and self.n_points % self._recalc_hess_freq == 0
@@ -152,7 +203,7 @@ class BaseIntegrator(ABC):
             f" {self.n_points} on the reaction path"
         )
 
-    def _initialise_species_and_method(self, species, method):
+    def _initialise_species_and_method(self, species, method) -> None:
 
         from autode.species.species import Species
         from autode.wrappers.methods import Method
@@ -277,11 +328,20 @@ class MWIntegrator(BaseIntegrator, ABC):
         self,
         max_points: int,
         step_size: MWDistance,
+        init_step: Union[MWDistance, Energy] = Energy(1e-3, "Ha"),
         *args,
         **kwargs,
     ):
         super().__init__(max_points, step_size, *args, **kwargs)
         self._step_size = MWDistance(step_size, "ang amu^1/2")
+
+        if isinstance(init_step, (Energy, MWDistance)):
+            self._init_step = init_step
+        else:
+            raise TypeError(
+                "init_step must be either autode.values.Energy or autode."
+                f"values.MWDistance, but {type(init_step)} was provided"
+            )
 
     def _initialise_run(self):
         logger.info("Initialising IRC integration run")
@@ -313,3 +373,55 @@ class MWIntegrator(BaseIntegrator, ABC):
                 f"gradient norm is greater then gtol: {self._gtol:.3f}."
                 f" Transition state geometry is likely not converged!"
             )
+
+    def _first_step(self) -> None:
+        """
+        Take the first step in the
+        """
+
+        eigvals, eigvecs = np.linalg.eigh(self._coords.h)
+        ts_eigvec = eigvecs[:, 0]
+        ts_eigval = eigvals[0]
+
+        logger.info(
+            f"First IRC step from saddle point in {self._direction} direction"
+            f" TS mode (eigenvalue) = {ts_eigval}"
+        )
+
+        scaled_ts_vec = ts_eigvec / np.linalg.norm(ts_eigvec)
+        largest_comp = np.argmax(np.abs(scaled_ts_vec))
+        if scaled_ts_vec[largest_comp] > 0:
+            pass
+        else:
+            scaled_ts_vec = -scaled_ts_vec
+
+        if isinstance(self._init_step, MWDistance):
+            logger.info(
+                f"Taking a step of size {self._init_step:.3f} Å amu^1/2"
+            )
+            step = self._init_step * scaled_ts_vec
+        elif isinstance(self._init_step, Energy):
+            self._init_step = self._init_step.to("Ha")
+            step_length = np.sqrt(self._init_step * 2 / np.abs(ts_eigval))
+            logger.info(
+                f"Energy-represented step from TS: expected energy "
+                f"reduction = {self._init_step} Ha"
+            )
+            step = step_length * scaled_ts_vec
+        else:
+            raise ValueError("Unknown type of initial step")
+
+        if self._direction == "forward":
+            pass
+        else:
+            step = -step
+
+        self._coords = self._coords + step
+        self._update_gradient_and_energy_for(self._coords)
+        self._update_hessian_by_formula_for(self._coords, self._history[-2])
+        logger.info(
+            f"Energy reduction after first IRC step "
+            f"= {self._last_energy_change}"
+        )
+
+        return None
