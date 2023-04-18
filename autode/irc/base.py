@@ -22,6 +22,7 @@ class BaseIntegrator(ABC):
     """
     Base class for reaction coordinate integrators
     """
+
     def __init__(
         self,
         max_points: int,
@@ -203,7 +204,9 @@ class BaseIntegrator(ABC):
             f" {self.n_points} on the reaction path"
         )
 
-    def _initialise_species_and_method(self, species, method) -> None:
+    def _initialise_species_and_method(
+        self, species: "Species", method: "Method"
+    ) -> None:
 
         from autode.species.species import Species
         from autode.wrappers.methods import Method
@@ -376,7 +379,8 @@ class MWIntegrator(BaseIntegrator, ABC):
 
     def _first_step(self) -> None:
         """
-        Take the first step in the
+        Take the first step in the IRC run, by stepping off the saddle point
+        following the imaginary TS mode
         """
 
         eigvals, eigvecs = np.linalg.eigh(self._coords.h)
@@ -420,7 +424,7 @@ class MWIntegrator(BaseIntegrator, ABC):
         self._update_gradient_and_energy_for(self._coords)
         self._update_hessian_by_formula_for(self._coords, self._history[-2])
         logger.info(
-            f"Energy reduction after first IRC step "
+            f"Energy change after first IRC step "
             f"= {self._last_energy_change}"
         )
 
