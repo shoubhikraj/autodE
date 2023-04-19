@@ -1,15 +1,67 @@
 """
 Routines for polynomial fitting used for optimisation, IRC etc.
 """
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import numpy as np
 
 
-def _parabolic_fit():
-    pass
+def two_point_cubic_fit(e0, g0, e1, g1):
+    """
+    Fit a general cubic equation with two points, using the energy
+    and directional gradient at both points. Returns the fitted
+    polynomial object. Equation: f(x) = ax**3 + bx**2 + cx + d
+
+    Args:
+        e0 (float):
+        g0 (float):
+        e1 (float):
+        g1 (float):
+
+    Returns:
+
+    """
+    # f(x) = ax**3 + bx**2 + cx + d
+    # f(0) = d; f(1) = a + b + c + d
+    d = e0
+    # f'(x) = 3 a x**2 + 2 b x + c
+    # f'(0) = c  => a+b = f(1) - c - d
+    c = g0
+    a_b = e1 - c - d
+    # f'(1) = 3a + 2b + c => 3a+2b = f'(1) - c
+    a3_2b = g1 - c
+    a = a3_2b - 2 * a_b
+    b = a_b - a
+    return np.poly1d([a, b, c, d])
 
 
-def _get_poly_minimum(
+def two_point_exact_parabolic_fit(e0, g0, e1):
+    """
+    Fit a general parabolic (quadratic) equation with two points,
+    using the energy and directional gradient at first point, and
+    the energy at the second point. Returns the fitted polynomial.
+    Equation: f(x) = a x**2  + b x + c
+
+    Args:
+        e0 (float): Energy at first point
+        g0 (float): Directional (1D) gradient in search direction
+        e1 (float): Energy at second point
+
+    Returns:
+        (np.poly1d): The fitted polynomial
+    """
+    # f(x) = ax**2 + bx + c
+    # f(0) = c, f(1) = a + b + c => a + b = f(1) - f(0)
+    c = e0
+    a_b = e1 - c
+    # f'(x) = 2ax + b; f'(0) = 2a + b
+    # f'(0) - (a+b) = a
+    a = g0 - a_b
+    b = a_b - a
+
+    return np.poly1d([a, b, c])
+
+
+def get_poly_minimum(
     poly: np.poly1d,
     u_bound: Optional[float] = None,
     l_bound: Optional[float] = None,
