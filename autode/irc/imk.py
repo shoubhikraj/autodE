@@ -75,8 +75,8 @@ class IMKIntegrator(MWIntegrator):
         # that low_sp is the same as grad
 
         if (
-            self._method.keywords.low_sp.bstring
-            == self._method.keywords.grad.bstring
+            method.keywords.low_sp.bstring != "" and
+            method.keywords.low_sp.bstring == method.keywords.grad.bstring
         ):
             raise RuntimeError(
                 "For Ishida-Morokuma-Komornicki IRC algorithm, low single"
@@ -90,7 +90,7 @@ class IMKIntegrator(MWIntegrator):
         order gradient descent method. If the gradient descent step
         produces a geometry that is higher energy (too large step, or
         too close to minima), then a parabolic fit is done using the two
-        points
+        points to obtain the minimum
 
         Returns:
             (MWCartesianCoordinates): Predicted coordinates
