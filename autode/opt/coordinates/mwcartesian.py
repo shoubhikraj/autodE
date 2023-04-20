@@ -26,7 +26,7 @@ class MWCartesianCoordinates(OptCoordinates):
 
         # to store square root of atomic masses for conversion
         arr.sqrt_masses = None
-        # distance along reaction coordinate
+        # adjacent distance along reaction coordinate
         arr.ircdist = None
 
         return arr
@@ -44,7 +44,9 @@ class MWCartesianCoordinates(OptCoordinates):
     def iadd(self, value: np.ndarray) -> OptCoordinates:
         return np.ndarray.__iadd__(self, value)
 
-    def __add__(self, other: Union[np.ndarray, float]) -> "OptCoordinates":
+    def __add__(
+        self, other: Union[np.ndarray, float]
+    ) -> "MWCartesianCoordinates":
         """
         Addition of another set of coordinates. Clears the current
         gradient vector and Hessian matrix.
@@ -54,7 +56,7 @@ class MWCartesianCoordinates(OptCoordinates):
             other (np.ndarray): Array to add to the coordinates
 
         Returns:
-            (autode.opt.coordinates.OptCoordinates): Shifted coordinates
+            (autode.opt.coordinates.MWCartesianCoordinates): Shifted coordinates
         """
         new_coords = self.copy()
         new_coords.clear_tensors()

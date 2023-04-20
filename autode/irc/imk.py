@@ -96,12 +96,13 @@ class IMKIntegrator(MWIntegrator):
                 "Energy higher after predictor step, using cubic "
                 "fit to obtain minimum"
             )
-            coords = _cubic_fit_get_minimum_irc(self._coords, coords)
+            coords = _cubic_fit_get_minimum_coords(self._coords, coords)
             if coords is None:
                 raise RuntimeError(
                     "Correction of large predictor step failed"
                     " Try restarting with lower step size"
                 )
+            # need accurate grad for elbow correction
             self._update_gradient_and_energy_for(coords)
 
         # Second correction: The gradient descent step will veer away
@@ -120,13 +121,14 @@ class IMKIntegrator(MWIntegrator):
                 f" threshold {self._elbow}°, skipping correction step"
             )
             self._coords = coords
+            self._calc_chord_dist()
             return None
 
         # obtain the bisector
         d = g_0_hat - g_1_hat
         d_hat = d / np.linalg.norm(d)
 
-        # take small step along bisector
+        # take small step along bisector and get energy
         coords_2 = coords + d_hat * self._corr_delta
         self._update_energy_for(coords_2)
 
@@ -137,12 +139,24 @@ class IMKIntegrator(MWIntegrator):
                 "IRC correction step failed, aborting run..."
                 "Try restarting with smaller step size"
             )
-        self._coords = coords + d_hat * self._corr_delta
+        self._coords = coords + d_hat * corr_3
         self._update_gradient_and_energy_for(self._coords)
+        self._calc_chord_dist()
+        return None
+
+    def _calc_chord_dist(self):
+        """
+        In IMK method, the arc length is not available (as it is a first
+        order method), so we approximate by chord length, and then save it
+        in the coordinate object, after a full cycle (i.e. predictor-corrector)
+        """
+        dist_vec = self._history.final - self._history.penultimate
+        dist = np.linalg.norm(dist_vec)
+        self._coords.ircdist = dist
         return None
 
 
-def _cubic_fit_get_minimum_irc(
+def _cubic_fit_get_minimum_coords(
     coords0: MWCartesianCoordinates,
     coords1: MWCartesianCoordinates,
 ) -> Optional[MWCartesianCoordinates]:
