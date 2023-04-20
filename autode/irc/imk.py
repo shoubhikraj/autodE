@@ -16,7 +16,6 @@ from autode.opt.coordinates import MWCartesianCoordinates
 from autode.opt.optimisers.polynomial_fit import (
     two_point_exact_parabolic_fit,
     get_poly_minimum,
-    two_point_cubic_fit,
 )
 from autode.log import logger
 
@@ -26,6 +25,9 @@ if TYPE_CHECKING:
 
 
 class IMKIntegrator(MWIntegrator):
+    """
+    Ishida-Morokuma-Komornicki reaction path integrator
+    """
     def __init__(
         self,
         max_points: int,
@@ -41,7 +43,13 @@ class IMKIntegrator(MWIntegrator):
         self._corr_delta = MWDistance(corr_delta)
 
     def _update_energy_for(self, coords: MWCartesianCoordinates):
+        """
+        Calculate the energy for a set of coordinates and update it
+        in-place
 
+        Args:
+            coords (MWCartesianCoordinates):
+        """
         self._species.coordinates = coords.to("cart")
         from autode.calculations import Calculation
 
@@ -77,35 +85,53 @@ class IMKIntegrator(MWIntegrator):
             )
 
     def _predictor_step(self) -> MWCartesianCoordinates:
+        """
+        For IMK IRC method, the prediction step is simply a first
+        order gradient descent method. If the gradient descent step
+        produces a geometry that is higher energy (too large step, or
+        too close to minima), then a parabolic fit is done using the two
+        points
 
+        Returns:
+            (MWCartesianCoordinates): Predicted coordinates
+        """
         # IMK predictor step is a simple gradient step (normalized)
         g_hat = self._coords.g / np.linalg.norm(self._coords.g)
         new_coords = self._coords + self._step_size * g_hat
 
-        return new_coords
-
-    def _corrector_step(self, coords: MWCartesianCoordinates):
-
-        # First correction: if the predictor step predicts a point with
-        # higher energy, then do a cubic fit to get minimum along
+        self._update_energy_for(new_coords)
+        # Predictor correction: if the predictor step predicts a point with
+        # higher energy, then do a parabolic fit to get minimum along
         # predictor step direction (inspired by ORCA)
-        # NOTE: ORCA does quadratic fit with energy, but since we have
-        # both gradients, it is better to use cubic fit
-        if coords.e > self._coords.e:
+        if new_coords.e > self._coords.e:
             logger.info(
-                "Energy higher after predictor step, using cubic "
+                "Energy higher after predictor step, using parabolic "
                 "fit to obtain minimum"
             )
-            coords = _cubic_fit_get_minimum_coords(self._coords, coords)
-            if coords is None:
+            x_min = _parabolic_fit_get_minimum_imkmod(
+                self._coords, new_coords, g_hat, max_step=1
+            )
+            if x_min is None:
                 raise RuntimeError(
                     "Correction of large predictor step failed"
                     " Try restarting with lower step size"
                 )
-            # need accurate grad for elbow correction
-            self._update_gradient_and_energy_for(coords)
+            new_coords = self._coords + x_min * g_hat
 
-        # Second correction: The gradient descent step will veer away
+        return new_coords
+
+    def _corrector_step(self, coords: MWCartesianCoordinates):
+        """
+        For IMK IRC method, the correction step moves along the bisector
+        of the angle between the gradient vector of previous point
+        and the gradient of predicted point. A parabolic fit is done
+        to get closer to the actual minimum energy path. The corrected
+        coordinates are saved (along with a en/grad calculation)
+
+        Args:
+            coords (MWCartesianCoordinates): Predicted coordinates
+        """
+        # Elbow correction: The gradient descent step will veer away
         # from the true MEP due to its finite size, so step along the
         # bisector between the two gradient vectors (which represents
         # how much the reaction path is curving) and do a parabolic fit
@@ -154,39 +180,6 @@ class IMKIntegrator(MWIntegrator):
         dist = np.linalg.norm(dist_vec)
         self._coords.ircdist = dist
         return None
-
-
-def _cubic_fit_get_minimum_coords(
-    coords0: MWCartesianCoordinates,
-    coords1: MWCartesianCoordinates,
-) -> Optional[MWCartesianCoordinates]:
-    """
-    Fit a cubic polynomial using both energies and gradients
-    and then get the minimum point as coordinates
-
-    Args:
-        coords0: First point
-        coords1: Second point
-
-    Returns:
-        (MWCartesianCoordinates): The minimum coordinates
-    """
-    assert coords0.e is not None and coords0.g is not None
-    assert coords1.e is not None and coords1.g is not None
-    # distance vector
-    dist_vec = coords1.raw - coords0.raw
-    d_hat = dist_vec / np.linalg.norm(dist_vec)
-    # project gradients
-    g0 = float(np.dot(coords0.g, d_hat))
-    g1 = float(np.dot(coords1.g, d_hat))
-    e0 = float(coords0.e.to("Ha"))
-    e1 = float(coords1.e.to("Ha"))
-    # fit cubic and get minimum
-    cubic_poly = two_point_cubic_fit(e0, g0, e1, g1)
-    x_min = get_poly_minimum(cubic_poly, u_bound=1, l_bound=0)
-    if x_min is None:
-        return None
-    return coords0 + (x_min * d_hat)
 
 
 def _parabolic_fit_get_minimum_imkmod(

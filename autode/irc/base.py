@@ -32,6 +32,29 @@ class BaseIntegrator(ABC):
         recalc_hess: Optional[int] = None,
         direction: str = "forward",
     ):
+        """
+        Create a new reaction coordinate integrator. The read_init_hess
+        argument is very important, because if set to True, the hessian
+        from the species is read in. Please be careful when using this
+        because the hessian in the species must be of the same level
+        as the method you are using for the IRC run (i.e. the Hessian
+        must be accurate), especially for Hessian based integrators.
+
+        The integration continues until max_points are integrated, or
+        the gradient falls below gtol, signalling that a minimum has
+        been reached.
+
+        Args:
+            max_points (int): Maximum number of points to integrate
+            step_size (float): The size of each integration step
+            gtol (GradientRMS): The gradient tolerance below which
+                                integration is stopped (minima reached)
+            read_init_hess (bool): Whether to read the initial Hessian
+                                   from the species provided in run()
+            recalc_hess (int|None): Frequency of hessian calculation for
+                                    predictor steps, None means never
+            direction (str): 'forward', 'reverse' or 'downhill'
+        """
         super().__init__()
         self._should_init_hess = not bool(read_init_hess)
 
@@ -40,12 +63,12 @@ class BaseIntegrator(ABC):
             self._recalc_hess_freq = int(recalc_hess)
 
         direction = direction.lower()
-        if direction in ["forward", "backward", "downhill"]:
+        if direction in ["forward", "reverse", "downhill"]:
             self._direction = direction
         else:
             raise ValueError(
                 "The direction for IRC integration must either"
-                "be 'forward', 'backward' or 'downhill' "
+                "be 'forward', 'reverse' or 'downhill' "
             )
         self._maxpoints = int(max_points)
         self._gtol = GradientRMS(gtol, "ha/ang")
@@ -88,7 +111,8 @@ class BaseIntegrator(ABC):
         return GradientRMS(np.sqrt(np.average(np.square(cart_g))))
 
     @property
-    def _last_energy_change(self):
+    def last_energy_change(self):
+        """Last ∆E found in this integrator"""
         if self.n_points > 1:
             delta_e = self._history.final.e - self._history.penultimate.e
             return Energy(delta_e, units="Ha")
@@ -97,6 +121,11 @@ class BaseIntegrator(ABC):
 
     @abstractmethod
     def _initialise_run(self):
+        """
+        Initialise the integrator run, i.e. set self._coords,
+        and set self._coords.g, self._coords.h etc. required
+        for the first step
+        """
         pass
 
     @abstractmethod
@@ -105,7 +134,6 @@ class BaseIntegrator(ABC):
         First step off the saddle point (TS), not used when downhill
         reaction coordinate integration is requested
         """
-        pass
 
     @abstractmethod
     def _predictor_step(self) -> OptCoordinates:
@@ -207,7 +235,16 @@ class BaseIntegrator(ABC):
     def _initialise_species_and_method(
         self, species: "Species", method: "Method"
     ) -> None:
+        """
+        Set the species and method, checking that the method
+        has the same level of theory for hessian and gradient
+        calculation (otherwise the IRC calculation will have
+        inconsistent levels of theory)
 
+        Args:
+            species:
+            method:
+        """
         from autode.species.species import Species
         from autode.wrappers.methods import Method
 
@@ -245,8 +282,14 @@ class BaseIntegrator(ABC):
 
         self._species, self._method = species, method
 
-    def _update_gradient_and_energy_for(self, coords: OptCoordinates):
+    def _update_gradient_and_energy_for(self, coords: OptCoordinates) -> None:
+        """
+        Calculate the gradient and energy for a set of coordinates,
+        and modify the coordinate in-place
 
+        Args:
+            coords (OptCoordinates):
+        """
         self._species.coordinates = coords.to("cart")
         from autode.calculations import Calculation
 
@@ -272,8 +315,14 @@ class BaseIntegrator(ABC):
 
         return None
 
-    def _update_hessian_gradient_and_energy_for(self, coords: OptCoordinates):
+    def _update_hessian_gradient_and_energy_for(self, coords: OptCoordinates) -> None:
+        """
+        Calculate the hessian, gradient and energy for a set of coordinates,
+        and then modify the coordinate in-place
 
+        Args:
+            coords (OptCoordinates):
+        """
         self._species.coordinates = coords.to("cart")
         from autode.calculations import Calculation
 
@@ -302,12 +351,14 @@ class BaseIntegrator(ABC):
 
     def _update_hessian_by_formula_for(
         self, coords: OptCoordinates, old_coords: OptCoordinates
-    ):
+    ) -> None:
         """
-        Update Hessian by using a formula instead of calculation
+        Update Hessian by using a formula instead of calculation,
+        modifies coords in place
 
         Args:
-            coords:
+            coords (OptCoordinates): The new coordinates
+            old_coords (OptCoordinates): The old coordinates
         """
         assert old_coords.h is not None
         updater = self._hessian_updater(
@@ -335,6 +386,20 @@ class MWIntegrator(BaseIntegrator, ABC):
         *args,
         **kwargs,
     ):
+        """
+        Create an IRC integrator in mass-weighted cartesian coordinates
+        The init_step argument is very important, as it determines
+        the first step from the TS. It can be given in either energy or
+        in mass-weighted distance. If given in energy, the first
+        displacement aims to reduce the energy by that amount, if in
+        distance, the TS mode eigenvector is scaled back to have that
+        size
+
+        Args:
+            max_points: Maximum number of points to integrate
+            step_size: The step size in mass weighted distance
+            init_step: The intial step, either in energy or in mw distance
+        """
         super().__init__(max_points, step_size, *args, **kwargs)
         self._step_size = MWDistance(step_size, "ang amu^1/2")
 
@@ -382,7 +447,6 @@ class MWIntegrator(BaseIntegrator, ABC):
         Take the first step in the IRC run, by stepping off the saddle point
         following the imaginary TS mode
         """
-
         eigvals, eigvecs = np.linalg.eigh(self._coords.h)
         ts_eigvec = eigvecs[:, 0]
         ts_eigval = eigvals[0]
@@ -417,15 +481,19 @@ class MWIntegrator(BaseIntegrator, ABC):
 
         if self._direction == "forward":
             pass
-        else:
+        elif self._direction == "reverse":
             step = -step
+        else:
+            raise ValueError("Invalid direction for starting step")
 
         self._coords = self._coords + step
+        step_size = np.linalg.norm(step)
+        self._coords.ircdist = step_size
+
         self._update_gradient_and_energy_for(self._coords)
         self._update_hessian_by_formula_for(self._coords, self._history[-2])
         logger.info(
             f"Energy change after first IRC step "
-            f"= {self._last_energy_change}"
+            f"= {self.last_energy_change}"
         )
-
         return None
