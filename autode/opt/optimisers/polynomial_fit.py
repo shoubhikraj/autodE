@@ -98,8 +98,8 @@ def get_poly_minimum(
             # if zero, move up another order of derivative
             if -1.0e-14 < i_th_deriv < 1.0e-14:
                 continue
-            # derivative > 0 and i is odd => minimum
-            elif i_th_deriv > 0 and i % 2 != 0:
+            # derivative > 0 and i is even => minimum
+            elif i_th_deriv > 0 and i % 2 == 0:
                 minima.append(point)
             # otherwise maxima or inflection point
             else:

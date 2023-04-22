@@ -96,7 +96,7 @@ class IMKIntegrator(MWIntegrator):
         """
         # IMK predictor step is a simple gradient step (normalized)
         g_hat = self._coords.g / np.linalg.norm(self._coords.g)
-        new_coords = self._coords + self._step_size * g_hat
+        new_coords = self._coords - self._step_size * g_hat
 
         return new_coords
 
@@ -166,6 +166,8 @@ class IMKIntegrator(MWIntegrator):
             )
         self._coords = coords_min
         self._update_gradient_and_energy_for(self._coords)
+        # dummy hessian update for subclass even though not used except first step
+        self._update_hessian_by_formula_for(self._coords, self._history[-2])
         self._save_chord_dist()
         return None
 

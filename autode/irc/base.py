@@ -108,13 +108,13 @@ class BaseIntegrator(ABC):
         if self._coords.g is None:
             return GradientRMS(np.inf)
 
-        cart_g = self._coords.to("cart", pass_tensors=True)
+        cart_g = self._coords.to("cart", pass_tensors=True).g
         return GradientRMS(np.sqrt(np.average(np.square(cart_g))))
 
     @property
     def last_energy_change(self):
         """Last ∆E found in this integrator"""
-        if self.n_points > 1:
+        if self.n_points > 0:
             delta_e = self._history.final.e - self._history.penultimate.e
             return Energy(delta_e, units="Ha")
         else:
