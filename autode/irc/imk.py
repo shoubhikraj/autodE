@@ -16,6 +16,7 @@ from autode.opt.coordinates import MWCartesianCoordinates
 from autode.opt.optimisers.polynomial_fit import (
     two_point_exact_parabolic_fit,
     get_poly_minimum,
+    two_point_cubic_fit,
 )
 from autode.log import logger
 
@@ -28,6 +29,7 @@ class IMKIntegrator(MWIntegrator):
     """
     Ishida-Morokuma-Komornicki reaction path integrator
     """
+
     def __init__(
         self,
         max_points: int,
@@ -75,8 +77,8 @@ class IMKIntegrator(MWIntegrator):
         # that low_sp is the same as grad
 
         if (
-            method.keywords.low_sp.bstring != "" and
-            method.keywords.low_sp.bstring == method.keywords.grad.bstring
+            method.keywords.low_sp.bstring != ""
+            and method.keywords.low_sp.bstring == method.keywords.grad.bstring
         ):
             raise RuntimeError(
                 "For Ishida-Morokuma-Komornicki IRC algorithm, low single"
@@ -99,25 +101,6 @@ class IMKIntegrator(MWIntegrator):
         g_hat = self._coords.g / np.linalg.norm(self._coords.g)
         new_coords = self._coords + self._step_size * g_hat
 
-        self._update_energy_for(new_coords)
-        # Predictor correction: if the predictor step predicts a point with
-        # higher energy, then do a parabolic fit to get minimum along
-        # predictor step direction (inspired by ORCA)
-        if new_coords.e > self._coords.e:
-            logger.info(
-                "Energy higher after predictor step, using parabolic "
-                "fit to obtain minimum"
-            )
-            x_min = _parabolic_fit_get_minimum_imkmod(
-                self._coords, new_coords, g_hat, max_step=1
-            )
-            if x_min is None:
-                raise RuntimeError(
-                    "Correction of large predictor step failed"
-                    " Try restarting with lower step size"
-                )
-            new_coords = self._coords + x_min * g_hat
-
         return new_coords
 
     def _corrector_step(self, coords: MWCartesianCoordinates):
@@ -131,6 +114,25 @@ class IMKIntegrator(MWIntegrator):
         Args:
             coords (MWCartesianCoordinates): Predicted coordinates
         """
+        # Predictor correction: if the predictor step predicts a point with
+        # higher energy i.e. too large, then do a cubic fit to get minimum
+        # along predictor step direction (inspired by ORCA)
+        # NOTE: We do cubic instead of quadratic since gradient is already
+        # available
+        if coords.e > self._coords.e:
+            logger.info(
+                "Energy higher after predictor step, using parabolic "
+                "fit to obtain minimum"
+            )
+            coords = _cubic_fit_get_minimum(self._coords, coords)
+            if coords is None:
+                raise RuntimeError(
+                    "Correction of large predictor step failed"
+                    " Try restarting with lower step size"
+                )
+            # accurate gradient required for elbow correction
+            self._update_gradient_and_energy_for(coords)
+
         # Elbow correction: The gradient descent step will veer away
         # from the true MEP due to its finite size, so step along the
         # bisector between the two gradient vectors (which represents
@@ -147,7 +149,7 @@ class IMKIntegrator(MWIntegrator):
                 f" threshold {self._elbow}°, skipping correction step"
             )
             self._coords = coords
-            self._calc_chord_dist()
+            self._save_chord_dist()
             return None
 
         # obtain the bisector
@@ -159,18 +161,18 @@ class IMKIntegrator(MWIntegrator):
         self._update_energy_for(coords_2)
 
         # parabolic fit to obtain corrected coordinates
-        corr_3 = _parabolic_fit_get_minimum_imkmod(coords, coords_2, d_hat)
-        if corr_3 is None:
+        coords_min = _parabolic_fit_get_minimum_imkmod(coords, coords_2)
+        if coords_min is None:
             raise RuntimeError(
                 "IRC correction step failed, aborting run..."
                 "Try restarting with smaller step size"
             )
-        self._coords = coords + d_hat * corr_3
+        self._coords = coords_min
         self._update_gradient_and_energy_for(self._coords)
-        self._calc_chord_dist()
+        self._save_chord_dist()
         return None
 
-    def _calc_chord_dist(self):
+    def _save_chord_dist(self):
         """
         In IMK method, the arc length is not available (as it is a first
         order method), so we approximate by chord length, and then save it
@@ -182,33 +184,76 @@ class IMKIntegrator(MWIntegrator):
         return None
 
 
-def _parabolic_fit_get_minimum_imkmod(
+def _cubic_fit_get_minimum(
     coords0: MWCartesianCoordinates,
     coords1: MWCartesianCoordinates,
-    d_hat: np.ndarray,
-    max_step: float = 3,
-) -> float:
+) -> Optional[MWCartesianCoordinates]:
     """
-    Fit a parabolic function with two coordinate points,
-    by using the energy and gradient from first point
-    and only energy from second point
+    Fit a cubic function with two coordinate points, using
+    the energies and directional gradients at both points,
+    then return the minimum. Cubic fit for correcting a large
+    predictor step must return a coordinates within the two
+    points (i.e. 0 < x < 1)
 
     Args:
         coords0: Coordinates of first point
         coords1: Coordinates of second point
-        d_hat: Unit vector in the direction coord0->coord1
+
+    Returns:
+        (MWCartesianCoordinates|None): The minimum coordinates, if found
+    """
+    assert coords0.e is not None and coords0.g is not None
+    assert coords1.e is not None and coords1.g is not None
+    # distance vector
+    dist_vec = coords1.raw - coords0.raw
+    # project gradients
+    g0 = float(np.dot(coords0.g, dist_vec))
+    g1 = float(np.dot(coords1.g, dist_vec))
+    e0 = float(coords0.e.to("Ha"))
+    e1 = float(coords1.e.to("Ha"))
+    cubic_poly = two_point_cubic_fit(e0=e0, g0=g0, e1=e1, g1=g1)
+    x_min = get_poly_minimum(cubic_poly, u_bound=1, l_bound=0)
+    if x_min is None:
+        return None
+
+    return coords0 + x_min * dist_vec
+
+
+def _parabolic_fit_get_minimum_imkmod(
+    coords0: MWCartesianCoordinates,
+    coords1: MWCartesianCoordinates,
+    max_step: float = 3,
+) -> Optional[MWCartesianCoordinates]:
+    """
+    Fit a parabolic function with two coordinate points,
+    by using the energy and gradient from first point
+    and only energy from second point. Modification
+    to original IMK correction method by Schmidt et al.
+
+    Args:
+        coords0: Coordinates of first point
+        coords1: Coordinates of second point
         max_step: Upper bound of x for searching minima
                   (beyond which the fit is considered uncertain)
 
     Returns:
-        (float): The minimum location x
+        (MWCartesianCoordinates|None): The minimum coordinates, if found
     """
+    # NOTE: Schmidt et al. recommend max_step = 2, but slighly larger value
+    # is allowed here since the bisector step is in MW units, not in Cartesian
+    # as used in publication, so range might be larger
     assert coords0.e is not None and coords1.e is not None
     assert coords0.g is not None
+    # distance vector
+    dist_vec = coords1.raw - coords0.raw
     # project the first gradient
-    g0 = float(np.dot(coords0.g, d_hat))
+    g0 = float(np.dot(coords0.g, dist_vec))
     e0 = float(coords0.e.to("Ha"))
     e1 = float(coords1.e.to("Ha"))
     # fit parabola and get minimum
-    parabola = two_point_exact_parabolic_fit(e0, g0, e1)
-    return get_poly_minimum(parabola, u_bound=max_step, l_bound=0)
+    parabola = two_point_exact_parabolic_fit(e0=e0, g0=g0, e1=e1)
+    x_min = get_poly_minimum(parabola, u_bound=max_step, l_bound=0)
+    if x_min is None:
+        return None
+
+    return coords0 + x_min * dist_vec

@@ -53,10 +53,10 @@ def two_point_exact_parabolic_fit(e0, g0, e1):
     # f(0) = c, f(1) = a + b + c => a + b = f(1) - f(0)
     c = e0
     a_b = e1 - c
-    # f'(x) = 2ax + b; f'(0) = 2a + b
-    # f'(0) - (a+b) = a
-    a = g0 - a_b
-    b = a_b - a
+    # f'(x) = 2ax + b; f'(0) = b
+    # (a+b) - b = a
+    b = g0
+    a = a_b - b
 
     return np.poly1d([a, b, c])
 
