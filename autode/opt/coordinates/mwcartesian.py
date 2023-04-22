@@ -69,9 +69,13 @@ class MWCartesianCoordinates(OptCoordinates):
     @classmethod
     def from_species(cls, species: "Species"):
 
-        sqrt_masses = np.sqrt(np.array(species.atomic_masses))
-        if len(sqrt_masses) == 0:
-            raise RuntimeError("Species must have atomic masses")
+        masses = [x.to("amu") for x in species.atomic_masses]
+
+        if len(masses) == 0 or np.isclose(masses, 0).any():
+            raise RuntimeError("One or more atomic masses are zero")
+
+        # masses are repeated 3 times for each atom
+        sqrt_masses = np.repeat(np.sqrt(np.array(masses)), 3)
 
         mwcoords = np.array(species.coordinates.flatten()) * sqrt_masses
 

@@ -76,10 +76,7 @@ class IMKIntegrator(MWIntegrator):
         # For IMK method, an sp calculation is also required, so check
         # that low_sp is the same as grad
 
-        if (
-            method.keywords.low_sp.bstring != ""
-            and method.keywords.low_sp.bstring == method.keywords.grad.bstring
-        ):
+        if method.keywords.low_sp.bstring != method.keywords.grad.bstring:
             raise RuntimeError(
                 "For Ishida-Morokuma-Komornicki IRC algorithm, low single"
                 " point (low_sp) calculations must have the same keywords as"

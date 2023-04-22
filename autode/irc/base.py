@@ -10,6 +10,7 @@ from autode.opt.optimisers.base import OptimiserHistory
 from autode.opt.optimisers.hessian_update import BofillUpdate
 from autode.exceptions import CalculationException
 from autode.log import logger
+from autode.config import Config
 
 if TYPE_CHECKING:
     from autode.species.species import Species
@@ -185,7 +186,7 @@ class BaseIntegrator(ABC):
         else:
             raise ValueError
 
-        if _flush_old_hessians:
+        if _flush_old_hessians and self.n_points > 2:
             old_coords = self._history[-3]
             if old_coords is not None:
                 old_coords.h = None
@@ -195,16 +196,20 @@ class BaseIntegrator(ABC):
         """Number of points integrated so far"""
         return len(self._history) - 1
 
-    def run(self, species: "Species", method: "Method") -> None:
+    def run(
+        self, species: "Species", method: "Method", n_cores: Optional[int]
+    ) -> None:
         """
         Run a reaction coordinate integration for the species with
-        the supplied method
+        the supplied method and number of cores (optional)
 
         Args:
             species (Species):
             method (Method):
+            n_cores (int):
         """
         self._initialise_species_and_method(species, method)
+        self._n_cores = int(n_cores) if n_cores is not None else Config.n_cores
         self._initialise_run()
 
         logger.info(
@@ -271,7 +276,6 @@ class BaseIntegrator(ABC):
 
         if (
             hess_calc_reqd
-            and method.keywords.hess.bstring != ""
             and method.keywords.hess.bstring != method.keywords.grad.bstring
         ):
             raise CalculationException(
