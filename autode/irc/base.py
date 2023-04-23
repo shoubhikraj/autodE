@@ -494,8 +494,8 @@ class MWIntegrator(BaseIntegrator, ABC):
 
         self._coords = self._coords + step
         step_size = np.linalg.norm(step)
-        self._coords.ircdist = step_size
-        # todo remove ircdist in favour of list for IMK and different arguments for step size
+        self._coords.path_s = step_size
+        # todo different arguments for step size?
 
         self._update_gradient_and_energy_for(self._coords)
         self._update_hessian_by_formula_for(self._coords, self._history[-2])
@@ -504,3 +504,6 @@ class MWIntegrator(BaseIntegrator, ABC):
             f"= {self.last_energy_change}"
         )
         return None
+
+    def print_geometries(self, filename: Optional[str] = None):
+        pass

@@ -26,8 +26,8 @@ class MWCartesianCoordinates(OptCoordinates):
 
         # to store square root of atomic masses for conversion
         arr.sqrt_masses = None
-        # adjacent distance along reaction coordinate
-        arr.ircdist = None
+        # total path length integrated upto this point
+        arr.path_s = None
 
         return arr
 
@@ -36,7 +36,7 @@ class MWCartesianCoordinates(OptCoordinates):
             return
         OptCoordinates.__array_finalize__(self, obj)
 
-        for attr in ("sqrt_masses", "ircdist"):
+        for attr in ("sqrt_masses", "path_s"):
             setattr(self, attr, getattr(obj, attr, None))
 
         return

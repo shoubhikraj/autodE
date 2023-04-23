@@ -179,7 +179,7 @@ class IMKIntegrator(MWIntegrator):
         """
         dist_vec = self._history.final - self._history.penultimate
         dist = np.linalg.norm(dist_vec)
-        self._coords.ircdist = dist
+        self._coords.path_s = dist
         return None
 
 
