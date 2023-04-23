@@ -1,6 +1,7 @@
 """
 Base classes for IRC calculation
 """
+import os.path
 from abc import ABC, abstractmethod
 from typing import Optional, Union, TYPE_CHECKING
 import numpy as np
@@ -237,6 +238,41 @@ class BaseIntegrator(ABC):
             f" {self.n_points} on the reaction path"
         )
 
+    @classmethod
+    def run_both_directions(
+        cls,
+        species: "Species",
+        method: "Method",
+        n_cores: Optional[int] = None,
+        *args,
+        **kwargs,
+    ):
+        """
+        Convenience function to run IRC calculations in both directions
+        and then combine the results for plotting and trajectory printing
+
+        Args:
+            species:
+            method:
+            n_cores:
+            *args:
+            **kwargs:
+
+        Returns:
+
+        """
+        kwargs.pop("direction", None)
+        forward_irc = cls(*args, **kwargs)
+        forward_irc.run(species=species, method=method, n_cores=n_cores)
+
+        reverse_irc = cls(*args, **kwargs)
+        reverse_irc.run(species=species, method=method, n_cores=n_cores)
+
+        total_history = forward_irc._history + reverse_irc._history[::-1]
+        # todo print total_history xyz
+        # todo plot data
+        return None
+
     def _initialise_species_and_method(
         self, species: "Species", method: "Method"
     ) -> None:
@@ -284,7 +320,7 @@ class BaseIntegrator(ABC):
                 "keywords (OR keywords are not detectable)"
             )
 
-        self._species, self._method = species, method
+        self._species, self._method = species.copy(), method
 
     def _update_gradient_and_energy_for(self, coords: OptCoordinates) -> None:
         """
@@ -506,4 +542,18 @@ class MWIntegrator(BaseIntegrator, ABC):
         return None
 
     def print_geometries(self, filename: Optional[str] = None):
-        pass
+        # todo replace later with updates from DHS pr
+        filename = (
+            filename
+            if filename is not None
+            else f"{self._species.name}_IRC_{self._direction}.trj.xyz"
+        )
+        if os.path.isfile(filename):
+            logger.warning(f"Removing {filename}")
+            os.remove(filename)
+        tmp_spc = self._species.copy()
+        for coord in self._history:
+            tmp_spc.coordinates = coord.to("cart")
+            tmp_spc.print_xyz_file(filename=filename, append=True)
+
+        return None
