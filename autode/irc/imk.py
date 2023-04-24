@@ -12,7 +12,7 @@ import math
 import numpy as np
 from autode.values import MWDistance, Angle
 from autode.irc.base import MWIntegrator
-from autode.opt.coordinates import MWCartesianCoordinates
+from autode.opt.coordinates import MWCartesianCoordinates, OptCoordinates
 from autode.opt.optimisers.polynomial_fit import (
     two_point_exact_parabolic_fit,
     get_poly_minimum,
@@ -184,9 +184,9 @@ class IMKIntegrator(MWIntegrator):
 
 
 def _cubic_fit_get_minimum(
-    coords0: MWCartesianCoordinates,
-    coords1: MWCartesianCoordinates,
-) -> Optional[MWCartesianCoordinates]:
+    coords0: OptCoordinates,
+    coords1: OptCoordinates,
+) -> Optional[OptCoordinates]:
     """
     Fit a cubic function with two coordinate points, using
     the energies and directional gradients at both points,
@@ -199,7 +199,7 @@ def _cubic_fit_get_minimum(
         coords1: Coordinates of second point
 
     Returns:
-        (MWCartesianCoordinates|None): The minimum coordinates, if found
+        (OptCoordinates|None): The minimum coordinates, if found
     """
     assert coords0.e is not None and coords0.g is not None
     assert coords1.e is not None and coords1.g is not None
@@ -219,10 +219,10 @@ def _cubic_fit_get_minimum(
 
 
 def _parabolic_fit_get_minimum_imkmod(
-    coords0: MWCartesianCoordinates,
-    coords1: MWCartesianCoordinates,
+    coords0: OptCoordinates,
+    coords1: OptCoordinates,
     max_step: float = 3,
-) -> Optional[MWCartesianCoordinates]:
+) -> Optional[OptCoordinates]:
     """
     Fit a parabolic function with two coordinate points,
     by using the energy and gradient from first point
@@ -236,7 +236,7 @@ def _parabolic_fit_get_minimum_imkmod(
                   (beyond which the fit is considered uncertain)
 
     Returns:
-        (MWCartesianCoordinates|None): The minimum coordinates, if found
+        (OptCoordinates|None): The minimum coordinates, if found
     """
     # NOTE: Schmidt et al. recommend max_step = 2, but slighly larger value
     # is allowed here since the bisector step is in MW units, not in Cartesian
