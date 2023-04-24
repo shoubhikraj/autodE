@@ -10,6 +10,7 @@ from autode.opt.coordinates import OptCoordinates, MWCartesianCoordinates
 from autode.opt.optimisers.base import OptimiserHistory
 from autode.opt.optimisers.hessian_update import BofillUpdate
 from autode.exceptions import CalculationException
+from autode.utils import work_in_tmp_dir
 from autode.log import logger
 from autode.config import Config
 
@@ -244,6 +245,7 @@ class BaseIntegrator(ABC):
         species: "Species",
         method: "Method",
         n_cores: Optional[int] = None,
+        read_init_hess: bool = False,
         *args,
         **kwargs,
     ):
@@ -255,17 +257,31 @@ class BaseIntegrator(ABC):
             species:
             method:
             n_cores:
+            read_init_hess:
             *args:
             **kwargs:
 
         Returns:
 
         """
+        from autode.species.species import Species
+        from autode.wrappers.methods import Method
+
+        assert isinstance(species, Species)
+        assert isinstance(method, Method)
+
         kwargs.pop("direction", None)
-        forward_irc = cls(*args, **kwargs)
+        n_cores = int(n_cores)
+
+        # calculate once to pass to each IRC
+        if not read_init_hess:
+            species.calc_hessian(method, n_cores=n_cores)
+            read_init_hess = True
+
+        forward_irc = cls(*args, read_init_hess=read_init_hess, **kwargs)
         forward_irc.run(species=species, method=method, n_cores=n_cores)
 
-        reverse_irc = cls(*args, **kwargs)
+        reverse_irc = cls(*args, read_init_hess=read_init_hess, **kwargs)
         reverse_irc.run(species=species, method=method, n_cores=n_cores)
 
         total_history = forward_irc._history + reverse_irc._history[::-1]
