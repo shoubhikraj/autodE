@@ -58,6 +58,7 @@ class BaseIntegrator(ABC):
                                     predictor steps, None means never
             direction (str): 'forward', 'reverse' or 'downhill'
         """
+        # todo init_hess = "read", "calc", None
         super().__init__()
         self._should_init_hess = not bool(read_init_hess)
 
