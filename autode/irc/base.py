@@ -83,6 +83,7 @@ class BaseIntegrator(ABC):
                 "be 'forward', 'reverse' or 'downhill' "
             )
         self._maxpoints = int(max_points)
+        self._step_size = float(step_size)
         self._gtol = GradientRMS(gtol, "ha/ang")
         self._species: Optional["Species"] = None
         self._method: Optional["Method"] = None
@@ -173,7 +174,8 @@ class BaseIntegrator(ABC):
         Takes the predicted point from the predictor step and then
         corrects the step so that it lies more closely in the
         reaction path. The corrected point is set as the current
-        coordinates in history
+        coordinates in history. Must also update the total length
+        of reaction path integrated so far
 
         Args:
             coords: Predicted coordinates
@@ -348,7 +350,7 @@ class BaseIntegrator(ABC):
             )
 
         hess_calc_reqd = (
-                self._read_init_hess or self._recalc_hess_freq is not None
+            self._read_init_hess or self._recalc_hess_freq is not None
         )
 
         if (
@@ -465,40 +467,66 @@ class MWIntegrator(BaseIntegrator, ABC):
         self,
         max_points: int,
         step_size: MWDistance,
-        init_step: Union[MWDistance, Energy] = Energy(1e-3, "Ha"),
+        use_energy_init_step: bool = True,
+        init_step_size: MWDistance = MWDistance(0.08, "ang amu^1/2"),
+        init_step_de: Energy = Energy(1e-3, "Ha"),
         *args,
         **kwargs,
     ):
         """
         Create an IRC integrator in mass-weighted cartesian coordinates
-        The init_step argument is very important, as it determines
-        the first step from the TS. It can be given in either energy or
-        in mass-weighted distance. If given in energy, the first
-        displacement aims to reduce the energy by that amount, if in
-        distance, the TS mode eigenvector is scaled back to have that
-        size
+        The init_step_size and init_step_de arguments are ignored if
+        direction="downhill" is set. The initial step from TS can be taken
+        to ensure a sufficient decrease in energy (useful for TS with very
+        high or very low eigenvalues) or with a fixed step size using the
+        TS mode eigenvector.
 
         Args:
             max_points: Maximum number of points to integrate
             step_size: The step size in mass weighted distance
-            init_step: The intial step, either in energy or in mw distance
+            use_energy_init_step: Whether to use a displacement that
+                                produces a fixed amount of energy change
+                                or to simply use a fixed step size. Default
+                                is True i.e. calculate step size according
+                                to init_step_de
+            init_step_size: Size of initial step from TS, ignored if
+                            use_energy_init_step=True
+            init_step_de: Requested energy change on initial step from TS,
+                          calculated from TS mode eigenvalue, ignored if
+                          use_energy_init_step = False
         """
         super().__init__(max_points, step_size, *args, **kwargs)
-        self._step_size = MWDistance(step_size, "ang amu^1/2")
 
-        if isinstance(init_step, (Energy, MWDistance)):
-            self._init_step = init_step
-        else:
-            raise TypeError(
-                "init_step must be either autode.values.Energy or autode."
-                f"values.MWDistance, but {type(init_step)} was provided"
-            )
+        self._step_size = MWDistance(step_size, "ang amu^1/2")
+        self._use_energy_init = bool(use_energy_init_step)
+        self._init_step_size = MWDistance(init_step_size, "ang amu^1/2")
+        self._init_step_de = Energy(init_step_de, "Ha")
+
+        self._path_s_total = MWDistance(0, "ang amu^1/2")
+
+    @property
+    def path_s(self) -> MWDistance:
+        """
+        Total length of IRC integrated so far
+        """
+        return self._path_s_total
+
+    @path_s.setter
+    def path_s(self, value: MWDistance):
+        """
+        Set a new length of IRC that has been integrated
+
+        Args:
+            value (MWDistance): New length of path
+        """
+        self._path_s_total = MWDistance(value, "ang amu^1/2")
 
     def _initialise_run(self):
         logger.info("Initialising IRC integration run")
         if self._species is None:
             raise RuntimeError("Species must be defined before IRC run")
         self._coords = MWCartesianCoordinates.from_species(self._species)
+        self._coords.path_s = self.path_s
 
         if self._direction != "downhill":
             self._init_from_ts()
@@ -525,8 +553,10 @@ class MWIntegrator(BaseIntegrator, ABC):
                 )
             self._coords.update_h_from_cart_h(self._species.hessian)
             # if gradients are also available, read them
-            if (self._species.gradient is not None
-                    and self._species.energy is not None):
+            if (
+                self._species.gradient is not None
+                and self._species.energy is not None
+            ):
                 self._coords.update_g_from_cart_g(self._species.gradient)
                 self._coords.e = self._species.energy
             else:
@@ -562,27 +592,27 @@ class MWIntegrator(BaseIntegrator, ABC):
 
         scaled_ts_vec = ts_eigvec / np.linalg.norm(ts_eigvec)
         largest_comp = np.argmax(np.abs(scaled_ts_vec))
+        # NOTE: "forward" direction means the direction in which the largest
+        # component of the TS eigenvector is positive (GAMESS manual)
         if scaled_ts_vec[largest_comp] > 0:
             pass
         else:
             scaled_ts_vec = -scaled_ts_vec
 
-        if isinstance(self._init_step, MWDistance):
-            logger.info(
-                f"Taking a step of size {self._init_step:.3f} Å amu^1/2"
-            )
-            step = self._init_step * scaled_ts_vec
-        elif isinstance(self._init_step, Energy):
-            self._init_step = self._init_step.to("Ha")
-            step_length = np.sqrt(self._init_step * 2 / np.abs(ts_eigval))
+        if self._use_energy_init:
+            step_size = np.sqrt(self._init_step_de * 2 / np.abs(ts_eigval))
             logger.info(
                 f"Energy-represented step from TS: expected energy "
-                f"reduction = {self._init_step} Ha"
+                f"reduction = {self._init_step_de} Ha"
             )
-            step = step_length * scaled_ts_vec
-        else:
-            raise ValueError("Unknown type of initial step")
 
+        else:
+            logger.info(
+                f"Taking a step of size {self._init_step_size:.3f} Å amu^1/2"
+            )
+            step_size = self._init_step_size
+
+        step = step_size * scaled_ts_vec
         if self._direction == "forward":
             pass
         elif self._direction == "reverse":
@@ -591,15 +621,12 @@ class MWIntegrator(BaseIntegrator, ABC):
             raise ValueError("Invalid direction for starting step")
 
         self._coords = self._coords + step
-        step_size = np.linalg.norm(step)
         self._coords.path_s = step_size
-        # todo different arguments for step size?
 
         self._update_gradient_and_energy_for(self._coords)
         self._update_hessian_by_formula_for(self._coords, self._history[-2])
         logger.info(
-            f"Energy change after first IRC step "
-            f"= {self.last_energy_change}"
+            f"Energy change after first IRC step = {self.last_energy_change}"
         )
         return None
 

@@ -44,6 +44,11 @@ class IMKIntegrator(MWIntegrator):
         self._elbow = Angle(elbow_thresh, units="degrees")
         self._corr_delta = MWDistance(corr_delta)
 
+    @property
+    def _hessian_required(self):
+        """IMK method does not require Hessian for steps"""
+        return False
+
     def _update_energy_for(self, coords: MWCartesianCoordinates):
         """
         Calculate the energy for a set of coordinates and update it
@@ -179,7 +184,8 @@ class IMKIntegrator(MWIntegrator):
         """
         dist_vec = self._history.final - self._history.penultimate
         dist = np.linalg.norm(dist_vec)
-        self._coords.path_s = dist
+        self.path_s += dist
+        self._coords.path_s = self.path_s
         return None
 
 
