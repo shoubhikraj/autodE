@@ -30,10 +30,10 @@ class BaseIntegrator(ABC):
         self,
         max_points: int,
         step_size: float,
+        direction: str = "forward",
         gtol: GradientRMS = GradientRMS(1e-3, "ha/ang"),
         read_init_hess: bool = False,
         recalc_hess: Optional[int] = None,
-        direction: str = "forward",
     ):
         """
         Create a new reaction coordinate integrator. The read_init_hess
@@ -50,21 +50,29 @@ class BaseIntegrator(ABC):
         Args:
             max_points (int): Maximum number of points to integrate
             step_size (float): The size of each integration step
+            direction (str): 'forward', 'reverse' for starting from TS
+                              or 'downhill' from any geometry
             gtol (GradientRMS): The gradient tolerance below which
                                 integration is stopped (minima reached)
             read_init_hess (bool): Whether to read the initial Hessian
-                                   from the species provided in run()
+                                   from the species provided in run(), or
+                                   to calculate it if needed
             recalc_hess (int|None): Frequency of hessian calculation for
                                     predictor steps, None means never
-            direction (str): 'forward', 'reverse' or 'downhill'
         """
         # todo init_hess = "read", "calc", None
         super().__init__()
-        self._should_init_hess = not bool(read_init_hess)
+        self._read_init_hess = not bool(read_init_hess)
 
         self._recalc_hess_freq = None
         if recalc_hess is not None:
             self._recalc_hess_freq = int(recalc_hess)
+        if not self._hessian_required:
+            logger.warning(
+                "Hessian not required, setting Hessian recalculation"
+                " frequency to None"
+            )
+            self._recalc_hess_freq = None
 
         direction = direction.lower()
         if direction in ["forward", "reverse", "downhill"]:
@@ -82,6 +90,15 @@ class BaseIntegrator(ABC):
         self._history = OptimiserHistory()
 
         self._hessian_updater = BofillUpdate
+
+    @property
+    @abstractmethod
+    def _hessian_required(self):
+        """
+        Does this integrator require Hessian calculation for steps
+        excluding first step from TS (Hessian is **always** needed
+        when starting from TS)
+        """
 
     @property
     def completed(self) -> bool:
@@ -232,7 +249,10 @@ class BaseIntegrator(ABC):
                 self._update_hessian_gradient_and_energy_for(pred_coords)
             else:
                 self._update_gradient_and_energy_for(pred_coords)
-                self._update_hessian_by_formula_for(pred_coords, self._coords)
+                if self._hessian_required:
+                    self._update_hessian_by_formula_for(
+                        pred_coords, self._coords
+                    )
             self._corrector_step(pred_coords)
 
         logger.info(
@@ -274,9 +294,13 @@ class BaseIntegrator(ABC):
         kwargs.pop("direction", None)
         n_cores = int(n_cores)
 
+        @work_in_tmp_dir()
+        def calc_hess():
+            species.calc_hessian(method, n_cores=n_cores)
+
         # calculate once to pass to each IRC
         if not read_init_hess:
-            species.calc_hessian(method, n_cores=n_cores)
+            calc_hess()
             read_init_hess = True
 
         forward_irc = cls(*args, read_init_hess=read_init_hess, **kwargs)
@@ -324,7 +348,7 @@ class BaseIntegrator(ABC):
             )
 
         hess_calc_reqd = (
-            self._should_init_hess or self._recalc_hess_freq is not None
+                self._read_init_hess or self._recalc_hess_freq is not None
         )
 
         if (
@@ -476,7 +500,22 @@ class MWIntegrator(BaseIntegrator, ABC):
             raise RuntimeError("Species must be defined before IRC run")
         self._coords = MWCartesianCoordinates.from_species(self._species)
 
-        if self._should_init_hess:
+        if self._direction != "downhill":
+            self._init_from_ts()
+        # for downhill runs, Hessian may still be required
+        elif self._hessian_required:
+            self._update_hessian_gradient_and_energy_for(self._coords)
+        # For gradient only methods like IMK
+        else:
+            self._update_gradient_and_energy_for(self._coords)
+
+    def _init_from_ts(self):
+        """
+        Initialise an IRC run that starts from a TS, by calculating or
+        reading in the Hessian as requested, and also gradient and energy
+        from the species if present, or evaluate them if not
+        """
+        if self._read_init_hess:
             self._update_hessian_gradient_and_energy_for(self._coords)
         else:
             if self._species.hessian is None:
@@ -485,16 +524,22 @@ class MWIntegrator(BaseIntegrator, ABC):
                     " not have any calculated hessian data"
                 )
             self._coords.update_h_from_cart_h(self._species.hessian)
-            self._update_gradient_and_energy_for(self._coords)
+            # if gradients are also available, read them
+            if (self._species.gradient is not None
+                    and self._species.energy is not None):
+                self._coords.update_g_from_cart_g(self._species.gradient)
+                self._coords.e = self._species.energy
+            else:
+                self._update_gradient_and_energy_for(self._coords)
 
         eigvals = np.linalg.eigvalsh(self._coords.h)
-        if eigvals[0] > 0 and self._direction != "downhill":
+        if eigvals[0] > 0:
             raise RuntimeError(
                 "For IRC runs starting from TS, there must be"
                 " at least one negative frequency"
             )
 
-        if self._g_norm > self._gtol and self._direction != "downhill":
+        if self._g_norm > self._gtol:
             raise RuntimeError(
                 "IRC run is starting from the transition state but "
                 f"gradient norm is greater then gtol: {self._gtol:.3f}."
