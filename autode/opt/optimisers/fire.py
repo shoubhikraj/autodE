@@ -14,6 +14,7 @@ class FIREOptimiser(NDOptimiser):
         self,
         *args,
         dt_init: Time = Time(0.25, "fs"),
+        dt_min: Time = Time(0.01, "fs"),
         dt_max: Time = Time(1.0, "fs"),
         alpha_start: float = 0.1,
         f_alpha: float = 0.99,
@@ -24,8 +25,10 @@ class FIREOptimiser(NDOptimiser):
         super().__init__(*args, **kwargs)
 
         self._dt = Time(dt_init, "fs")
+        self._dt_min = Time(dt_min, "fs")  # todo check
         self._dt_max = Time(dt_max, "fs")
-        self._alpha = float(alpha_start)
+        self._alpha_start = float(alpha_start)
+        self._alpha = self._alpha_start
         self._f_alpha = float(f_alpha)
         assert 0 < self._f_alpha < 1
         self._f_dec = float(f_dec)
@@ -36,7 +39,9 @@ class FIREOptimiser(NDOptimiser):
         self._v = None
         self._N_plus = 0
         self._N_minus = 0
-        self._N_delay = None  # todo
+        self._N_delay = None  # todo complete
+        self._N_min_thresh = None  # todo complete
+        self._initial_delay = None  # todo
 
     def _initialise_run(self) -> None:
         self._coords = CartesianCoordinates(self._species.coordinates)
@@ -56,3 +61,14 @@ class FIREOptimiser(NDOptimiser):
         else:  # p <= 0
             self._N_plus = 0
             self._N_minus += 1
+            if self._N_minus > self._N_min_thresh:
+                return None
+            # todo put code also in converged
+            if not (self._initial_delay and self.iteration < self._N_delay):
+                self._dt = max(self._dt * self._f_dec, self._dt_min)
+            self._alpha = self._alpha_start
+            # Correction for uphill motion
+            self._coords = (
+                self._coords - 0.5 * self._dt * self._v
+            )  # todo should we change self._coords??
+            self._v[:] = 0.0
