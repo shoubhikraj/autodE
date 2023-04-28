@@ -22,6 +22,10 @@ class Constants:
     ang_to_m = 1e-10  # m ang^-1
     a0_to_m = a0_to_ang * ang_to_m  # Å m^-1
 
+    s_to_fs = 1.0e15  # fs s^-1
+    s_to_ps = 1.0e12  # ps s^-1
+    s_to_min = 1.0 / 60.0  # min s^-1
+
     per_cm_to_hz = c_in_cm = 299792458 * 100  # cm s^-1
 
     amu_to_kg = 1.66053906660e-27  # kg amu^-1

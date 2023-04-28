@@ -12,7 +12,9 @@ from autode.units import (
     ev,     J,       wavenumber,  hz,            MB,              ha_per_ang,
     ang,    a0,      amu,         kg,            GB,              kg_m_sq,
     nm,     pm,      m_e,         amu_ang_sq,    TB,              ha_per_a0_sq,
-    ha_per_ang_sq,   J_per_m_sq,  J_per_ang_sq,  J_per_ang_sq_kg,
+    ha_per_ang_sq,   J_per_m_sq,  J_per_ang_sq,  J_per_ang_sq_kg, ang_per_fs,
+    ang_per_fs,      m_per_s,     sec,           fs,              ps,
+    minute
 )
 # fmt: on
 
@@ -494,6 +496,30 @@ class Distance(Value):
         return f"Distance({round(self, 5)} {self.units.name})"
 
     def __init__(self, value, units=ang):
+        super().__init__(value, units=units)
+
+
+class Time(Value):
+    """Time in some units, defaults to seconds"""
+
+    implemented_units = [sec, fs, ps, minute]
+
+    def __repr__(self):
+        return f"Time({round(self, 4)} {self.units.name})"
+
+    def __init__(self, value, units=sec):
+        super().__init__(value, units=units)
+
+
+class Velocity(Value):
+    """Velocity in some units, defaults to meters per second"""
+
+    implemented_units = [m_per_s, ang_per_fs]
+
+    def __repr__(self):
+        return f"Velocity({round(self, 4)} {self.units.name})"
+
+    def __init__(self, value, units=m_per_s):
         super().__init__(value, units=units)
 
 
