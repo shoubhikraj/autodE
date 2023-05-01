@@ -511,18 +511,6 @@ class Time(Value):
         super().__init__(value, units=units)
 
 
-class Velocity(Value):
-    """Velocity in some units, defaults to meters per second"""
-
-    implemented_units = [m_per_s, ang_per_fs]
-
-    def __repr__(self):
-        return f"Velocity({round(self, 4)} {self.units.name})"
-
-    def __init__(self, value, units=m_per_s):
-        super().__init__(value, units=units)
-
-
 class MWDistance(Value):
     """Mass-weighted distance in some units, defaults to angstroms amu^(1/2)"""
 

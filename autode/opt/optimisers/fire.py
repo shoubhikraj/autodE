@@ -6,7 +6,7 @@ import numpy as np
 
 from autode.opt.coordinates import CartesianCoordinates
 from autode.opt.optimisers import NDOptimiser
-from autode.values import Time, Velocity, Distance, Mass
+from autode.values import Time, Mass
 from autode.log import logger
 
 
@@ -54,7 +54,7 @@ class FIREOptimiser(NDOptimiser):
                            beginning of optimisation for n_delay iterations
                            to not decrease time step
             atom_mass: Mass of each atom (in amu)
-            **kwargs:
+            **kwargs: Keyword arguments passed on to NDOptimiser
         """
         super().__init__(*args, **kwargs)
 
@@ -64,12 +64,13 @@ class FIREOptimiser(NDOptimiser):
         self._alpha_start = float(alpha_start)
         self._alpha = self._alpha_start
         self._f_alpha = float(f_alpha)
-        assert 0 < self._f_alpha < 1
         self._f_dec = float(f_dec)
-        assert 0 < self._f_dec < 1
         self._f_inc = float(f_inc)
-        assert self._f_inc > 1
+
         self._mass = Mass(atom_mass, "amu")
+        assert 0 < self._f_alpha < 1
+        assert 0 < self._f_dec < 1
+        assert self._f_inc > 1
         assert self._mass > 0
 
         self._v = None
@@ -77,7 +78,7 @@ class FIREOptimiser(NDOptimiser):
         self._N_minus = 0
         self._N_delay = int(n_delay)
         self._max_N_min = int(max_up)
-        self._initial_delay = bool(initial_delay)  # todo
+        self._initial_delay = bool(initial_delay)
         self._masses = None
 
     def _initialise_run(self) -> None:
@@ -104,11 +105,13 @@ class FIREOptimiser(NDOptimiser):
         return self._abs_delta_e < self.etol and self._g_norm < self.gtol
 
     def _step(self) -> None:
-        # todo first step
-        # todo remove velocity from units
+        """
+        FIRE optimisation step, currently only implemented with
+        Euler semi-implicit integrator
+        """
         forces = -self._coords.g
-        p = np.dot(forces, self._v)
-        if p > 0:
+        power = np.dot(forces, self._v)
+        if power > 0:
             self._N_plus += 1
             self._N_minus = 0
             if self._N_plus > self._N_delay:
@@ -119,10 +122,14 @@ class FIREOptimiser(NDOptimiser):
         else:  # p <= 0
             self._N_plus = 0
             self._N_minus += 1
-            # todo put code also in converged
+            logger.info(
+                "Force and velocity are no longer aligned, resetting alpha, "
+                "and setting velocities to zero. Reducing timestep if allowed"
+            )
             if not (self._initial_delay and self.iteration < self._N_delay):
                 if self._dt * self._f_dec >= self._dt_min:
                     self._dt = self._dt * self._f_dec
+
             self._alpha = self._alpha_start
             # Correction for uphill motion
             coords = self._coords - 0.5 * self._dt * self._v
@@ -133,6 +140,16 @@ class FIREOptimiser(NDOptimiser):
     def _euler_semi_implicit(
         self, forces: np.ndarray, coords: CartesianCoordinates
     ):
+        """
+        Euler semi-implicit integration step for FIRE
+
+        Args:
+            forces: Forces on each atom in Cartesian coordinates
+            coords: Coordinates on which to take the steps
+
+        Returns:
+            (CartesianCoordinates): New coordinates after integration
+        """
         v_2 = self._v + self._dt * (forces / self._masses)
         # FIRE 2.0 mixing step
         v_2 = (1 - self._alpha) * v_2 + (

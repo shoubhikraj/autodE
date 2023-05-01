@@ -204,15 +204,6 @@ ps = Unit(name="ps", conversion=Constants.s_to_ps, aliases=["picoseconds"])
 fs = Unit(name="fs", conversion=Constants.s_to_fs, aliases=["femtoseconds"])
 
 # ----------------------------------------------------------------------
-# ---------------------------- Velocities ------------------------------
-
-m_per_s = CompositeUnit(m, per=[sec], aliases=["m/s", "m s-1", "m s^-1"])
-
-ang_per_fs = CompositeUnit(
-    ang, per=[fs], aliases=["ang/fs", "Å/fs", "Å fs^-1"]
-)
-
-# ----------------------------------------------------------------------
 # ------------------------------ Masses --------------------------------
 
 amu = BaseUnit(name="amu", aliases=["Da", "g mol-1", "g mol^-1", "g/mol"])
