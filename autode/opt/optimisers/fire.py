@@ -89,6 +89,15 @@ class FIREOptimiser(NDOptimiser):
 
     @property
     def converged(self) -> bool:
+        """
+        For FIRE, there is an additional criteria, which is the number of
+        successive uphill (force.dot.v > 0) steps has to be less than a
+        certain threshold (set by max_up argument). If that happens then
+        optimisation is assumed to be finished (i.e. unable to proceed)
+
+        Returns:
+            (bool): True if converged, False if not
+        """
 
         if self._species is not None and self._species.n_atoms == 1:
             return True  # Optimisation 0 DOF is always converged
