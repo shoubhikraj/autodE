@@ -18,13 +18,13 @@ class FIREOptimiser(NDOptimiser):
         *args,
         dt_init: Time = Time(0.25, "fs"),
         dt_min: Time = Time(0.001, "fs"),
-        dt_max: Time = Time(1.0, "fs"),
+        dt_max: Time = Time(2.0, "fs"),
         alpha_start: float = 0.1,
         f_alpha: float = 0.99,
         f_dec: float = 0.5,
         f_inc: float = 1.1,
-        n_delay: int = 2,
-        max_up: int = 3,
+        n_delay: int = 5,
+        max_up: int = 5,
         initial_delay: bool = True,
         atom_mass: Mass = Mass(4, "amu"),
         **kwargs,
@@ -143,7 +143,10 @@ class FIREOptimiser(NDOptimiser):
             # Correction for uphill motion
             coords = self._coords - 0.5 * self._dt * self._v
             self._v[:] = 0.0
-        logger.info("Taking a FIRE Euler semi-implicit step")
+        logger.info(
+            f"Taking a FIRE Euler semi-implicit step with "
+            f"timestep: {self._dt:.3f} fs"
+        )
         self._coords = self._euler_semi_implicit(forces, coords)
 
     def _euler_semi_implicit(

@@ -12,9 +12,9 @@ from autode.units import (
     ev,     J,       wavenumber,  hz,            MB,              ha_per_ang,
     ang,    a0,      amu,         kg,            GB,              kg_m_sq,
     nm,     pm,      m_e,         amu_ang_sq,    TB,              ha_per_a0_sq,
-    ha_per_ang_sq,   J_per_m_sq,  J_per_ang_sq,  J_per_ang_sq_kg, ang_per_fs,
-    ang_per_fs,      m_per_s,     sec,           fs,              ps,
-    minute
+    ha_per_ang_sq,   J_per_m_sq,  J_per_ang_sq,  J_per_ang_sq_kg, sec,
+    fs,              ps,          minute,
+
 )
 # fmt: on
 
