@@ -53,11 +53,7 @@ class LBFGSOptimiser(NDOptimiser):
     @property
     def _row_k(self) -> int:
         """
-        To reduce memory operations, self._s, self._y and self._rho are used
-        in a cyclic manner i.e. when max_vecs rows are filled up, it reuses
-        row 0 and over-writes the information there, removing that datapoint
-        from the list of stored vectors. row_k points to the current row
-        that should be written to.
+
 
         Returns:
             (int): The row number (or 1st dimension number for 1d arrays)
@@ -66,9 +62,14 @@ class LBFGSOptimiser(NDOptimiser):
 
     def _step(self) -> None:
 
-        # NOTE:
+        # NOTE: To reduce memory operations, self._s, self._y and self._rho are used
+        # in a cyclic manner i.e. when max_vecs rows are filled up, it reuses
+        # row 0 and over-writes the information there, removing that datapoint
+        # from the list of stored vectors. row_k points to the current row
+        # that should be written to.
         if self.iteration >= 1:
-            row_k = self._row_k
+            row_k = (self.iteration + self._max_vecs) % self._max_vecs
+            # todo check above formula is it correct for python or fortran
             s = self._coords - self._history[-2]
             y = self._coords.g - self._history[-2].g
             y_s = np.dot(y, s)
@@ -78,7 +79,7 @@ class LBFGSOptimiser(NDOptimiser):
             # save in memory
             self._s[row_k, :] = s
             self._y[row_k, :] = y
-            self._rho[row_k] = y_s
+            self._rho[row_k] = 1.0 / y_s
             # update the hessian diagonal
             y_norm = np.linalg.norm(y)
             if abs(y_norm) < 1.0e-16:
@@ -95,8 +96,23 @@ def _get_lbfgs_step_py(
     y_matrix: np.ndarray,
     rho_array: np.ndarray,
     hess_diag: np.ndarray,
-    row_k: int,
+    iteration: int,
 ):
+    max_vecs = s_matrix.shape[0]
     q = grad.copy()
+    a = np.zeros(max_vecs)
+    # todo double check the formulas
+    if iteration <= max_vecs:
+        iter_range = range(0, iteration)
+    else:
+        iter_range = range(0, max_vecs)
 
-    pass
+    for i in reversed(iter_range):
+        row_k = (iteration + max_vecs) % max_vecs
+        mat_idx = i + row_k
+        if mat_idx >= max_vecs:
+            mat_idx -= max_vecs
+        # todo fix this!! i is not the same as iter_range
+        a[i] = rho_array[i] * np.dot(s_matrix[mat_idx], q)
+        q -= a[i] * y_matrix[mat_idx]
+
