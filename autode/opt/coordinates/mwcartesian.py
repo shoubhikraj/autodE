@@ -5,6 +5,8 @@ from autode.units import ang_amu_half
 
 if TYPE_CHECKING:
     from autode.units import Unit
+    from autode.hessians import Hessian
+    from autode.values import Gradient
     from autode.species.species import Species
 
 
@@ -84,9 +86,7 @@ class MWCartesianCoordinates(OptCoordinates):
 
         return coords
 
-    def _update_g_from_cart_g(
-        self, arr: Optional["autode.values.Gradient"]
-    ) -> None:
+    def _update_g_from_cart_g(self, arr: Optional["Gradient"]) -> None:
         """
         Updates the gradient from a calculated Cartesian gradient, for
         mass-weighted cartesian coordinates, that simply means dividing
@@ -100,9 +100,7 @@ class MWCartesianCoordinates(OptCoordinates):
 
         self.g = arr
 
-    def _update_h_from_cart_h(
-        self, arr: Optional["autode.values.Hessian"]
-    ) -> None:
+    def _update_h_from_cart_h(self, arr: Optional["Hessian"]) -> None:
         if arr is not None:
             mass_matrix = np.outer(self.sqrt_masses, self.sqrt_masses)
             arr = np.array(arr) / mass_matrix
