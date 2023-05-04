@@ -90,6 +90,7 @@ class LBFGSOptimiser(NDOptimiser):
         logger.info("Taking an L-BFGS step")
 
 
+# todo port this to cython after finishing checking
 def _get_lbfgs_step_py(
     grad: np.ndarray,
     s_matrix: np.ndarray,
@@ -113,6 +114,17 @@ def _get_lbfgs_step_py(
         if mat_idx >= max_vecs:
             mat_idx -= max_vecs
         # todo fix this!! i is not the same as iter_range
-        a[i] = rho_array[i] * np.dot(s_matrix[mat_idx], q)
+        a[i] = rho_array[mat_idx] * np.dot(s_matrix[mat_idx], q)
         q -= a[i] * y_matrix[mat_idx]
+
+    q *= hess_diag  # use q as working space for z
+    for i in iter_range:
+        row_k = (iteration + max_vecs) % max_vecs
+        mat_idx = i + row_k
+        if mat_idx >= max_vecs:
+            mat_idx -= max_vecs
+        beta = rho_array[mat_idx] * np.dot(y_matrix[mat_idx], q)
+        q += (a[i] - beta) * s_matrix[mat_idx]
+
+    return -q
 
