@@ -7,11 +7,11 @@ import numpy as np
 from typing import Optional
 from collections import deque
 from autode.opt.coordinates import CartesianCoordinates
-from autode.opt.optimisers.base import NDOptimiser
+from autode.opt.optimisers import RFOptimiser
 from autode.log import logger
 
 
-class LBFGSOptimiser(NDOptimiser):
+class LBFGSOptimiser(RFOptimiser):
     """
     L-BFGS optimisation in Cartesian coordinates
     """
@@ -19,7 +19,7 @@ class LBFGSOptimiser(NDOptimiser):
     def __init__(
         self,
         *args,
-        max_step=0.2,
+        max_step: float = 0.2,
         max_vecs: int = 15,
         h0: np.ndarray = None,
         **kwargs,
@@ -34,6 +34,10 @@ class LBFGSOptimiser(NDOptimiser):
         self._rho = deque(maxlen=max_vecs)  # stores 1/(y.T @ s) - 1D
         self._h0: Optional[np.ndarray] = h0  # initial 1D diagonal of Hess
 
+    @property
+    def converged(self) -> bool:
+        return self._g_norm < self.gtol and self._abs_delta_e < self.etol
+
     def _initialise_run(self) -> None:
         # NOTE: While LBFGS could be used for internal coordinates, it is
         # practically pointless because to store the matrices required to
@@ -41,14 +45,10 @@ class LBFGSOptimiser(NDOptimiser):
         # same amount of memory and effort as calculating Hessian
         self._coords = CartesianCoordinates(self._species.coordinates)
         self._update_gradient_and_energy()
-        n_atoms = self._species.n_atoms
-        self._s = np.zeros(shape=(self._max_vecs, n_atoms))
-        self._y = np.zeros(shape=(self._max_vecs, n_atoms))
-        self._rho = np.zeros(shape=(self._max_vecs,))
         if self._h0 is not None and self._h0.shape == (self._max_vecs,):
             assert isinstance(self._h0, np.ndarray)
         else:
-            self._h0 = np.ones(shape=(self._max_vecs,))
+            self._h0 = np.ones_like(self._coords)
         return None
 
     def _step(self) -> None:
@@ -60,8 +60,8 @@ class LBFGSOptimiser(NDOptimiser):
         # that should be written to.
         if self.iteration >= 1:
             # todo check above formula is it correct for python or fortran
-            s = self._coords - self._history[-2]
-            y = self._coords.g - self._history[-2].g
+            s = self._coords - self._history.penultimate
+            y = self._coords.g - self._history.penultimate.g
             y_s = np.dot(y, s)
             if abs(y_s) < 1.0e-16:
                 logger.warning("Resetting y_s in LBFGS to 1.0")
@@ -86,11 +86,11 @@ class LBFGSOptimiser(NDOptimiser):
             )
         else:
             g_size = np.linalg.norm(self._coords.g)
-            step = self._h0 * self._coords.g
+            step = -(self._h0 * self._coords.g)
             step *= min(g_size, 1 / g_size)
 
         logger.info("Taking an L-BFGS step")
-        self._coords = self._coords + step
+        self._take_step_within_trust_radius(step)
 
 
 # todo port this to cython after finishing checking
