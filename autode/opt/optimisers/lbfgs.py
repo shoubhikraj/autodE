@@ -1,7 +1,11 @@
 """
-Gradient-only Limited-memory BFGS optimiser algorithm,
+Gradient-only limited-memory BFGS optimiser algorithm,
 suitable for large molecular systems where calculating
 or storing Hessian would be difficult.
+
+References:
+[1] J. Nocedal, Mathematics of Computation, 35, 1980, 773-782
+[2] D. C. Liu, J. Nocedal, Mathematical Programming, 45, 1989, 503-528
 """
 import numpy as np
 from typing import Optional
@@ -29,10 +33,10 @@ class LBFGSOptimiser(RFOptimiser):
 
         self.alpha = max_step
         self._max_vecs = abs(int(max_vecs))
-        self._s = deque(maxlen=max_vecs)  # stores changes in coords -2D
-        self._y = deque(maxlen=max_vecs)  # stores changes in grad - 2D
-        self._rho = deque(maxlen=max_vecs)  # stores 1/(y.T @ s) - 1D
-        self._h0: Optional[np.ndarray] = h0  # initial 1D diagonal of Hess
+        self._s = deque(maxlen=max_vecs)  # stores changes in coords - arrays
+        self._y = deque(maxlen=max_vecs)  # stores changes in grad - arrays
+        self._rho = deque(maxlen=max_vecs)  # stores 1/(y.T @ s) - floats
+        self._h0: Optional[np.ndarray] = h0  # initial 1D diagonal of Hessian
 
     @property
     def converged(self) -> bool:
@@ -42,13 +46,14 @@ class LBFGSOptimiser(RFOptimiser):
         # NOTE: While LBFGS could be used for internal coordinates, it is
         # practically pointless because to store the matrices required to
         # convert between internal <-> cartesian would require almost the
-        # same amount of memory and effort as calculating Hessian
+        # same amount of memory and effort as storing the Hessian
         self._coords = CartesianCoordinates(self._species.coordinates)
         self._update_gradient_and_energy()
         if self._h0 is not None and self._h0.shape == (self._max_vecs,):
             assert isinstance(self._h0, np.ndarray)
         else:
-            self._h0 = np.ones_like(self._coords)
+            # unit diagonal matrix
+            self._h0 = np.ones(shape=self._coords.shape[0])
         return None
 
     def _step(self) -> None:
@@ -75,19 +80,23 @@ class LBFGSOptimiser(RFOptimiser):
             if abs(y_norm) < 1.0e-16:
                 logger.warning("Resetting y_norm in LBFGS to 1.0")
             gamma = y_s / (y_norm**2)
-            self._h0 *= gamma
+            h_diag = self._h0 * gamma
             step = _get_lbfgs_step_py(
                 self._coords.g,
                 self._s,
                 self._y,
                 self._rho,
-                self._h0,
-                self.iteration,
+                h_diag,
             )
         else:
-            g_size = np.linalg.norm(self._coords.g)
+            # g_size = np.linalg.norm(self._coords.g)
             step = -(self._h0 * self._coords.g)
-            step *= min(g_size, 1 / g_size)
+            step_size = np.linalg.norm(step)
+            # Make the first step size cautious, half of trust radius
+            # or 0.01 angstrom whichever is bigger
+            if step_size > max(self.alpha / 2, 0.01):
+                step = step * max(self.alpha / 2, 0.01) / step_size
+            # step *= min(g_size, 1 / g_size)
 
         logger.info("Taking an L-BFGS step")
         self._take_step_within_trust_radius(step)
@@ -100,17 +109,13 @@ def _get_lbfgs_step_py(
     y_matrix: deque,
     rho_array: deque,
     hess_diag: np.ndarray,
-    iteration: int,
 ):
-    max_vecs = len(s_matrix)
+    n_vecs = len(s_matrix)  # todo check
     q = grad.copy()
-    a = np.zeros(max_vecs)
+    # todo problem here: [a] array should be only as long as iter range
     # todo double check the formulas
-    if iteration <= max_vecs:
-        iter_range = range(0, iteration)
-    else:
-        iter_range = range(0, max_vecs)
-
+    iter_range = range(0, n_vecs)
+    a = np.zeros(shape=(len(iter_range)))
     for i in reversed(iter_range):
         # todo fix this!! i is not the same as iter_range?
         a[i] = rho_array[i] * np.dot(s_matrix[i], q)
