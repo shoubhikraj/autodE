@@ -61,11 +61,17 @@ class LBFGSOptimiser(RFOptimiser):
         )  # 0.004 Ha ~ 2 kcal/mol
         self._n_e_rise = 0
         self._n_e_decrease = 0
+        self._n_resets = 0
         self._first_step = True
 
     @property
     def converged(self) -> bool:
         return self._g_norm < self.gtol and self._abs_delta_e < self.etol
+
+    @property
+    def _exceeded_maximum_iteration(self) -> bool:
+        # todo stop when too many reset or subsequent energy rise
+        return super()._exceeded_maximum_iteration or self._n_resets > 2
 
     def _initialise_run(self) -> None:
         # NOTE: While LBFGS could be used for internal coordinates, it is
@@ -218,6 +224,7 @@ class LBFGSOptimiser(RFOptimiser):
                 f"Energy rising for consecutive {_max_allow_n_e_rise_steps} "
                 f"steps, resetting LBFGS"
             )
+            self._n_resets += 1
             self._y.clear()
             self._s.clear()
             self._rho.clear()
