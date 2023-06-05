@@ -101,17 +101,20 @@ class LBFGSOptimiser(RFOptimiser):
     def _step(self) -> None:
         """Take an L-BFGS step, using pure python routines"""
 
-        self._update_trust_radius()
+        # NOTE: reset_lbfgs function must be called before update_trust
+        # as it can remove the last step from memory so that the energy
+        # rise is not registered by reset_lbfgs
         self._reset_lbfgs_if_required()
+        self._update_trust_radius()
 
         # First step or after LBFGS reset
         if self._first_step:
             step = -(self._h0 * self._coords.g)
             step_size = np.linalg.norm(step)
-            # Make the first step size cautious, half of trust radius
+            # Make the first step size cautious, quarter of trust radius
             # or 0.01 angstrom whichever is bigger
-            if step_size > max(self.alpha / 2, 0.01):
-                step = step * max(self.alpha / 2, 0.01) / step_size
+            if step_size > max(self.alpha / 4, 0.01):
+                step = step * max(self.alpha / 4, 0.01) / step_size
             self._first_step = False
 
         # NOTE: self._s, self._y and self._rho are python deques with a maximum
@@ -160,13 +163,14 @@ class LBFGSOptimiser(RFOptimiser):
 
         # NOTE: Here a very simple trust radius update method is used,
         # if the energy rises beyond the threshold, reject last step and
-        # half the trust radius
+        # set the trust radius to 1/4 of the value
         if self.last_energy_change > self._max_e_rise:
             logger.warning(
                 f"Energy increased by {self.last_energy_change},"
                 f" rejecting last step and reducing trust radius"
             )
             self._history.pop()
+            self._n_e_decrease = 0
             self.alpha /= 4
             return None
 
@@ -183,13 +187,14 @@ class LBFGSOptimiser(RFOptimiser):
             last_step_size = np.linalg.norm(self._coords - self._history[-2])
             self._n_e_decrease += 1
             if self._n_e_decrease >= 4 and np.isclose(
-                last_step_size, self.alpha, rtol=0.05
+                last_step_size, self.alpha, rtol=0.01
             ):
                 logger.debug(
                     "Energy falling smoothly - increasing trust radius"
                 )
-                self.alpha *= 1.5
-                self._n_e_decrease = 0  # reset after increasing
+                self.alpha *= 1.2
+                # reset after increasing trust radius
+                self._n_e_decrease = 0
 
         return None
 
