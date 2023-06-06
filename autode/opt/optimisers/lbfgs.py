@@ -13,6 +13,10 @@ from typing import Optional
 from collections import deque
 from autode.opt.coordinates import CartesianCoordinates
 from autode.opt.optimisers import RFOptimiser
+from autode.opt.optimisers.polynomial_fit import (
+    two_point_cubic_fit,
+    get_poly_minimum,
+)
 from autode.values import Energy
 from autode.log import logger
 
@@ -232,8 +236,7 @@ class LBFGSOptimiser(RFOptimiser):
         return None
 
     def _adjust_last_step(self):
-        # Check if the last taken step satisfies the Wolfe conditions, otherwise
-        # use cubic interpolation/extrapolation to correct the step
+        # Check if the last taken step satisfies the Wolfe conditions.
         # Values taken from Nocedal and Wright for quasi-Newton methods
         c_1 = 1.0e-4
         c_2 = 0.9
@@ -249,6 +252,11 @@ class LBFGSOptimiser(RFOptimiser):
         second_wolfe = np.dot(-last_step, self._coords.g) <= (
             -c_2 * np.dot(last_step, self._history[-2].g)
         )
+        if first_wolfe and second_wolfe:
+            return None
+
+        # if not satisfied, perform cubic interpolation/extrapolation with
+        # the two gradients to obtain the minimiser
         pass
 
 
