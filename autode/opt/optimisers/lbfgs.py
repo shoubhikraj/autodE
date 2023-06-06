@@ -256,7 +256,27 @@ class LBFGSOptimiser(RFOptimiser):
             return None
 
         # if not satisfied, perform cubic interpolation/extrapolation with
-        # the two gradients to obtain the minimiser
+        # the directional gradients to obtain the minimiser
+        g0 = float(np.dot(self._history[-2].g, last_step))
+        g1 = float(np.dot(self._coords.g, last_step))
+        e0 = float(self._history[-2].e)
+        e1 = float(self._coords.e)
+        cubic_poly = two_point_cubic_fit(e0, g0, e1, g1)
+        minim = get_poly_minimum(cubic_poly)
+
+        interp_coords = self._history[-2] + last_step * minim
+        interp_energy = cubic_poly(minim)
+        interp_grad = (1 - minim) * self._history[
+            -2
+        ].g + minim * self._coords.g
+        self._history.pop()
+        self._coords = interp_coords
+        if 0 < minim < 2:  # todo is the range reasonable?
+            self._coords.e = Energy(interp_energy)
+            self._coords.g = interp_grad
+        elif minim > 2:
+            self._update_gradient_and_energy()
+
         pass
 
 
