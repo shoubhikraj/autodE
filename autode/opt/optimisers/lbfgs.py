@@ -231,6 +231,26 @@ class LBFGSOptimiser(RFOptimiser):
             self._first_step = True
         return None
 
+    def _adjust_last_step(self):
+        # Check if the last taken step satisfies the Wolfe conditions, otherwise
+        # use cubic interpolation/extrapolation to correct the step
+        # Values taken from Nocedal and Wright for quasi-Newton methods
+        c_1 = 1.0e-4
+        c_2 = 0.9
+        last_step = self._coords.raw - self._history.penultimate.raw
+        # first condition: f(x + a * p) <= f(x) + c_1 * a * dot(p, f'(x))
+        # OR, f(x + step) <= f(x) + c_1 dot(step, f'(x))
+        first_wolfe = self._coords.e <= (
+            self._history[-2].e + c_1 * np.dot(last_step, self._history[-2].g)
+        )
+        # second condition: dot(-p, f'(x+ a * p)) <= -c_2 * dot(p, f'(x))
+        # OR, a * dot(-p, f'(x + a*p)) <= -c_2 * a * dot(p, f'(x))
+        # OR, dot(-step, f'(x + a*p)) <= -c_2 * dot(step, f'(x))
+        second_wolfe = np.dot(-last_step, self._coords.g) <= (
+            -c_2 * np.dot(last_step, self._history[-2].g)
+        )
+        pass
+
 
 def _get_lbfgs_step_py(
     grad: np.ndarray,
