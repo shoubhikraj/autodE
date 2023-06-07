@@ -188,7 +188,7 @@ class LBFGSOptimiser(RFOptimiser):
             logger.warning(
                 "Fitted polynomial has no minimum, skipping line search"
             )
-            return None
+            return self._coords
 
         interp_coords = last_coords + last_step * minim
         interp_coords.e = Energy(cubic_poly(minim))
@@ -363,11 +363,13 @@ class LBFGSFunctionOptimiser(LBFGSOptimiser):
         self._fn = fn
         self._x0 = x0
         self._jac = jac
+        if func_args is None:
+            func_args = []
         self._fn_args = func_args
 
     def _update_gradient_and_energy(self) -> None:
-        self._coords.e = Energy(self._fn(self._coords.raw))
-        self._coords.g = self._jac(self._coords.raw).flatten()
+        self._coords.e = Energy(self._fn(self._coords.raw, *self._fn_args))
+        self._coords.g = self._jac(self._coords.raw, *self._fn_args).flatten()
 
     def _initialise_run(self) -> None:
         self._coords = CartesianCoordinates(self._x0)
@@ -378,7 +380,7 @@ class LBFGSFunctionOptimiser(LBFGSOptimiser):
     # todo check the gtol and etol values
     @classmethod
     def minimise_function(
-        cls, fn, x0, jac, func_args, gtol=1e-3, etol=1e-4, *args, **kwargs
+        cls, fn, x0, jac, func_args=None, gtol=1e-3, etol=1e-4, *args, **kwargs
     ):
         from autode import Molecule
         from autode.methods import XTB
