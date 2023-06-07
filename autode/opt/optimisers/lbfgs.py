@@ -8,6 +8,9 @@ References:
 [2] D. C. Liu, J. Nocedal, Mathematical Programming, 45, 1989, 503-528
 [3] J. Nocedal, S. Wright, "Numerical Optimization", 2nd ed., Springer, 2006
 """
+import time
+
+import matplotlib.pyplot as plt
 import numpy as np
 from typing import Optional
 from collections import deque
@@ -114,8 +117,8 @@ class LBFGSOptimiser(RFOptimiser):
         # NOTE: reset_lbfgs function must be called before update_trust
         # as it can remove the last step from memory so that the energy
         # rise is not registered by reset_lbfgs
-        self._reset_lbfgs_if_required()
-        self._update_trust_radius()
+        self._adjust_last_step()
+        time.sleep(1)
 
         # First step or after LBFGS reset
         if self._first_step:
@@ -236,48 +239,64 @@ class LBFGSOptimiser(RFOptimiser):
         return None
 
     def _adjust_last_step(self):
+        if self.iteration == 0:
+            return None
         # Check if the last taken step satisfies the Wolfe conditions.
         # Values taken from Nocedal and Wright for quasi-Newton methods
         c_1 = 1.0e-4
         c_2 = 0.9
-        last_step = self._coords.raw - self._history.penultimate.raw
+        last_coords = self._history.penultimate
+        last_step = self._coords.raw - last_coords.raw
         # first condition: f(x + a * p) <= f(x) + c_1 * a * dot(p, f'(x))
         # OR, f(x + step) <= f(x) + c_1 dot(step, f'(x))
         first_wolfe = self._coords.e <= (
-            self._history[-2].e + c_1 * np.dot(last_step, self._history[-2].g)
+            last_coords.e + c_1 * np.dot(last_step, last_coords.g)
         )
         # second condition: dot(-p, f'(x+ a * p)) <= -c_2 * dot(p, f'(x))
         # OR, a * dot(-p, f'(x + a*p)) <= -c_2 * a * dot(p, f'(x))
         # OR, dot(-step, f'(x + a*p)) <= -c_2 * dot(step, f'(x))
         second_wolfe = np.dot(-last_step, self._coords.g) <= (
-            -c_2 * np.dot(last_step, self._history[-2].g)
+            -c_2 * np.dot(last_step, last_coords.g)
         )
         if first_wolfe and second_wolfe:
+            logger.info("Wolfe conditions fulfilled, skipping line search")
             return None
 
+        logger.warning(
+            "Wolfe conditions not satisfied, fitting cubic polynomial"
+            " to obtain the minimum point along last search direction"
+        )
         # if not satisfied, perform cubic interpolation/extrapolation with
         # the directional gradients to obtain the minimiser
-        g0 = float(np.dot(self._history[-2].g, last_step))
+        g0 = float(np.dot(last_coords.g, last_step))
         g1 = float(np.dot(self._coords.g, last_step))
-        e0 = float(self._history[-2].e)
+        e0 = float(last_coords.e)
         e1 = float(self._coords.e)
         cubic_poly = two_point_cubic_fit(e0, g0, e1, g1)
         minim = get_poly_minimum(cubic_poly)
+        if minim is None:
+            # polynomial has no minimum, skip linear fit
+            logger.warning(
+                "Fitted polynomial has no minimum, skipping line search"
+            )
+            return None
 
-        interp_coords = self._history[-2] + last_step * minim
+        interp_coords = last_coords + last_step * minim
         interp_energy = cubic_poly(minim)
-        interp_grad = (1 - minim) * self._history[
-            -2
-        ].g + minim * self._coords.g
-        self._history.pop()
+        interp_grad = (1 - minim) * last_coords.g + minim * self._coords.g
+        self._history.pop()  # todo is interpolated value reasonable?
         self._coords = interp_coords
-        if 0 < minim < 2:  # todo is the range reasonable?
+        if -1 < minim < 2:  # todo is the range reasonable?
             self._coords.e = Energy(interp_energy)
             self._coords.g = interp_grad
-        elif minim > 2:
+        elif minim > 2 or minim < -1:
+            logger.warning(
+                "Cubic fit: minimum quite far away from any known point,"
+                " recalculating energy/gradient"
+            )
             self._update_gradient_and_energy()
 
-        pass
+        return None
 
 
 def _get_lbfgs_step_py(
