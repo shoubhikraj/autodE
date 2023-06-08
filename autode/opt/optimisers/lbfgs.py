@@ -32,7 +32,8 @@ class LBFGSOptimiser(RFOptimiser):
     def __init__(
         self,
         *args,
-        max_step: float = 0.2,
+        max_alpha: float = 0.2,
+        init_alpha: float = 0.2,
         max_vecs: int = 15,
         h0: np.ndarray = None,
         max_e_rise: Energy = Energy(0.004, "Ha"),
@@ -54,15 +55,14 @@ class LBFGSOptimiser(RFOptimiser):
         """
         super().__init__(*args, **kwargs)
 
-        self.alpha = max_step
+        self.alpha = init_alpha
+        self._max_alpha = max_alpha
         self._max_vecs = abs(int(max_vecs))
         self._s = deque(maxlen=max_vecs)  # stores changes in coords - arrays
         self._y = deque(maxlen=max_vecs)  # stores changes in grad - arrays
         self._rho = deque(maxlen=max_vecs)  # stores 1/(y.T @ s) - floats
         self._h_diag: Optional[np.ndarray] = h0  # 1D diagonal of Hessian
-        self._max_e_rise = Energy(
-            abs(max_e_rise), "Ha"
-        )  # 0.004 Ha ~ 2 kcal/mol
+        self._max_e_rise = Energy(abs(max_e_rise), "Ha")
         self._n_e_rise = 0
         self._n_e_decrease = 0
         self._n_resets = 0
@@ -75,11 +75,17 @@ class LBFGSOptimiser(RFOptimiser):
     @property
     def _exceeded_maximum_iteration(self) -> bool:
         # todo stop when too many reset or subsequent energy rise
-        return super()._exceeded_maximum_iteration or self._n_resets > 2
+        if self._n_resets >= 2:
+            logger.error(
+                "Too many LBFGS resets, optimisation cannot proceed further"
+            )
+            return True
+
+        return super()._exceeded_maximum_iteration
 
     def _initialise_run(self) -> None:
         # NOTE: While LBFGS could be used for internal coordinates, it is
-        # practically pointless because to store the matrices required to
+        # practically useless because to store the matrices required to
         # convert between internal <-> cartesian would require almost the
         # same amount of memory and effort as storing the Hessian
         self._coords = CartesianCoordinates(self._species.coordinates)
@@ -113,7 +119,7 @@ class LBFGSOptimiser(RFOptimiser):
         Store the coordinate and gradient change in last step in L-BFGS
         and update the Hessian diagonal
         """
-        if self.iteration == 0:
+        if self._first_step:
             return None
 
         s = self._coords - self._history.penultimate
@@ -211,6 +217,8 @@ class LBFGSOptimiser(RFOptimiser):
         # NOTE: reset_lbfgs function must be called before update_trust
         # as it can remove the last step from memory so that the energy
         # rise is not registered by reset_lbfgs
+        self._reset_lbfgs_if_required()
+        self._update_trust_radius()
         self._update_lbfgs_storage()
 
         coords = self._get_coords_from_line_search()
@@ -229,11 +237,7 @@ class LBFGSOptimiser(RFOptimiser):
         # items from the beginning of the deque
         else:
             step = _get_lbfgs_step_py(
-                coords.g,
-                self._s,
-                self._y,
-                self._rho,
-                self._h_diag,
+                coords.g, self._s, self._y, self._rho, self._h_diag
             )
 
         logger.info(
@@ -263,26 +267,20 @@ class LBFGSOptimiser(RFOptimiser):
 
         # NOTE: Here a very simple trust radius update method is used,
         # if the energy rises beyond the threshold, reject last step and
-        # set the trust radius to 1/4 of the value
+        # set the trust radius to 1/2 of the value
         if self.last_energy_change > self._max_e_rise:
             logger.warning(
-                f"Energy increased by {self.last_energy_change},"
-                f" rejecting last step and reducing trust radius"
+                f"Energy increase too large ({self.last_energy_change} Ha),"
+                f" rejecting last step"
             )
             self._history.pop()
             self._n_e_decrease = 0
-            self.alpha /= 4
+            self.alpha /= 2
             return None
-
-        # If energy increases, but within the threshold, reduce trust radius
-        # more cautiously
-        if self.last_energy_change > 0:
-            logger.warning("Energy rising - reducing trust radius")
-            self._n_e_decrease = 0
-            self.alpha /= 1.5
 
         # If energy going down for last 4 steps AND the last step was
         # nearly at trust radius then increase trust radius, cautiously
+        # but not more than the maximum value
         if self.last_energy_change < 0:
             last_step_size = np.linalg.norm(self._coords - self._history[-2])
             self._n_e_decrease += 1
@@ -292,7 +290,7 @@ class LBFGSOptimiser(RFOptimiser):
                 logger.debug(
                     "Energy falling smoothly - increasing trust radius"
                 )
-                self.alpha *= 1.2
+                self.alpha = min(1.2 * self.alpha, self._max_alpha)
                 # reset after increasing trust radius
                 self._n_e_decrease = 0
 
@@ -315,8 +313,8 @@ class LBFGSOptimiser(RFOptimiser):
 
         if self._n_e_rise >= _max_allow_n_e_rise_steps:
             logger.warning(
-                f"Energy rising for consecutive {_max_allow_n_e_rise_steps} "
-                f"steps, resetting LBFGS"
+                f"Energy rising for consecutive {_max_allow_n_e_rise_steps}"
+                f" steps, resetting LBFGS"
             )
             self._n_resets += 1
             self._y.clear()
@@ -328,25 +326,44 @@ class LBFGSOptimiser(RFOptimiser):
 
 def _get_lbfgs_step_py(
     grad: np.ndarray,
-    s_matrix: deque,
-    y_matrix: deque,
+    s_list: deque,
+    y_list: deque,
     rho_array: deque,
     hess_diag: np.ndarray,
 ):
+    """
+    Obtain the L-BFGS step by multiplying the gradient with
+    the Hessian from the s, y and rho values from previous
+    steps. Returns - H^-1 @ grad. (Note: any vector can be used
+    in place of grad, and will return -H^-1 @ vector) where H is
+    the Hessian
+
+    Args:
+        grad (np.ndarray): The gradient array to multiply with H
+        s_list (deque[np.ndarray]): List of coordinate update arrays
+        y_list (deque[np.ndarray]): List of gradient update arrays
+        rho_array: List of rho values for previous iterations
+        hess_diag: The current diagonal of the Hessian
+
+    Returns:
+        (np.ndarray): The L-BFGS step (-H^-1 @ g)
+    """
+    # Notation follows Algorithm 7.4 page 178, in Nocedal
+    # and Wright, "Numerical Optimization", 2nd ed.
     # todo is python implementation fast enough or do we need cython
-    n_vecs = len(s_matrix)
+    n_vecs = len(s_list)
     q = grad.copy()
     # todo double check the formulas
     iter_range = range(0, n_vecs)
-    a = np.zeros(shape=(len(iter_range)))
+    alpha = np.zeros(shape=(len(iter_range)))
     for i in reversed(iter_range):
-        a[i] = rho_array[i] * np.dot(s_matrix[i], q)
-        q -= a[i] * y_matrix[i]
+        alpha[i] = rho_array[i] * np.dot(s_list[i], q)
+        q -= alpha[i] * y_list[i]
 
     q *= hess_diag  # use q as working space for z
     for i in iter_range:
-        beta = rho_array[i] * np.dot(y_matrix[i], q)
-        q += (a[i] - beta) * s_matrix[i]
+        beta = rho_array[i] * np.dot(y_list[i], q)
+        q += (alpha[i] - beta) * s_list[i]
 
     return -q
 
@@ -377,7 +394,6 @@ class LBFGSFunctionOptimiser(LBFGSOptimiser):
         if self._h_diag is None:
             self._h_diag = np.ones(shape=self._x0.shape[0])
 
-    # todo check the gtol and etol values
     @classmethod
     def minimise_function(
         cls, fn, x0, jac, func_args=None, gtol=1e-3, etol=1e-4, *args, **kwargs
@@ -391,3 +407,4 @@ class LBFGSFunctionOptimiser(LBFGSOptimiser):
         # generate a dummy species
         tmp_spc = Molecule(smiles="N#N")
         opt.run(tmp_spc, XTB())
+        return None
