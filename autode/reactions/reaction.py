@@ -655,6 +655,67 @@ class Reaction:
 
         return None
 
+    def print_mapped_xyz_geometries(self):
+        """
+        Print the atom-mapped xyz geometries that can be fed into
+        other external programs, or used for double ended TS search
+        like GSM
+        """
+        if sum(p.graph.number_of_edges() for p in self.prods) > sum(
+            r.graph.number_of_edges() for r in self.reacs
+        ):
+            rct_complex = self.product.copy()
+            prod_complex = self.reactant.copy()
+        else:
+            rct_complex = self.reactant.copy()
+            prod_complex = self.product.copy()
+
+        from autode.bond_rearrangement import get_bond_rearrangs
+        from autode.transition_states.locate_tss import (
+            translate_rotate_reactant,
+        )
+        from autode.mol_graphs import get_mapping, reac_graph_to_prod_graph
+        from autode.exceptions import NoMapping
+
+        bond_rearrs = get_bond_rearrangs(
+            reactant=rct_complex,
+            product=prod_complex,
+            name=f"{self.name}_ext",
+        )
+        if bond_rearrs is None:
+            raise RuntimeError("Unable to find a bond rearrangement")
+
+        for idx, bond_rearr in enumerate(bond_rearrs):
+            assert bond_rearr.n_bbonds >= bond_rearr.n_fbonds
+            translate_rotate_reactant(
+                reactant=rct_complex,
+                bond_rearrangement=bond_rearr,
+                shift_factor=1.5 if rct_complex.charge == 0 else 2.5,
+            )
+            translate_rotate_reactant(
+                prod_complex,
+                bond_rearrangement=bond_rearr,
+                shift_factor=1.5 if prod_complex.charge == 0 else 2.5,
+            )
+            # todo product rearrangement seems to not be working
+            # todo minimize product RMSD against reactant complex? will
+            # also fix the NEB problem
+            try:
+                mapping = get_mapping(
+                    graph1=prod_complex.graph,
+                    graph2=reac_graph_to_prod_graph(
+                        rct_complex.graph, bond_rearr
+                    ),
+                )
+                prod_copy = prod_complex.copy()
+                prod_copy.reorder_atoms(mapping)
+                prod_copy.print_xyz_file(f"{self.name}_product_ext_{idx}.xyz")
+                rct_complex.print_xyz_file(
+                    f"{self.name}_reactant_ext_{idx}.xyz"
+                )
+            except NoMapping:
+                pass
+
     @checkpoint_rxn_profile_step("transition_state_conformers")
     @work_in("transition_states")
     def find_lowest_energy_ts_conformer(self) -> None:
