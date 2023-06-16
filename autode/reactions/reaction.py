@@ -670,10 +670,7 @@ class Reaction:
             rct_complex = self.reactant.copy()
             prod_complex = self.product.copy()
 
-        from autode.bond_rearrangement import (
-            get_bond_rearrangs,
-            BondRearrangement,
-        )
+        from autode.bond_rearrangement import get_bond_rearrangs
         from autode.transition_states.locate_tss import (
             translate_rotate_reactant,
         )
