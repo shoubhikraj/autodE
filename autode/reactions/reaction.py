@@ -695,6 +695,7 @@ class Reaction:
                 bond_rearrangement=bond_rearr,
                 shift_factor=1.5 if rct_complex.charge == 0 else 2.5,
             )
+            _rotate_and_align_product_complex(prod_complex, rct_complex)
 
             # todo product alighnment is not working, maybe perform BFGS
             # with vdW radii?
@@ -709,9 +710,11 @@ class Reaction:
                 )
                 prod_copy = prod_complex.copy()
                 prod_copy.reorder_atoms(mapping)
-                prod_copy.print_xyz_file(f"{self.name}_product_ext_{idx}.xyz")
+                prod_copy.print_xyz_file(
+                    filename=f"{self.name}_product_ext_{idx}.xyz"
+                )
                 rct_complex.print_xyz_file(
-                    f"{self.name}_reactant_ext_{idx}.xyz"
+                    filename=f"{self.name}_reactant_ext_{idx}.xyz"
                 )
             except NoMapping:
                 pass
@@ -929,7 +932,7 @@ class Reaction:
         return rxn
 
 
-def _rotate_and_align_product_complex(product, reactant, n_iters):
+def _rotate_and_align_product_complex(product, reactant, n_iters: int = 10):
     """
     Rotate the individual molecular components of the product complex
     to align them against the reactant complex as much as possible
@@ -994,6 +997,6 @@ def _combined_rmsd_repulsion_cost(
     moved_product.rotate_mol(
         axis=x[7:10], theta=x[10], mol_index=prod_complex_move_mol_idx
     )
-    repulsion = product.calc_repulsion(prod_complex_move_mol_idx)
-    rmsd = calc_rmsd(product.coordinates, reactant.coordinates)
+    repulsion = moved_product.calc_repulsion(prod_complex_move_mol_idx)
+    rmsd = calc_rmsd(moved_product.coordinates, reactant.coordinates)
     return rmsd + repulsion
