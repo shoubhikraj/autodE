@@ -655,12 +655,15 @@ class Reaction:
 
         return None
 
-    def print_mapped_xyz_geometries(self):
+    def print_mapped_xyz_geometries(self, preopt_reacs_prods: bool = False):
         """
         Print the atom-mapped xyz geometries that can be fed into
         other external programs, or used for double ended TS search
         like GSM
         """
+        if preopt_reacs_prods:
+            self.optimise_reacs_prods()
+
         if sum(p.graph.number_of_edges() for p in self.prods) > sum(
             r.graph.number_of_edges() for r in self.reacs
         ):
@@ -924,3 +927,73 @@ class Reaction:
         rxn = cls()
         rxn.load(filepath)
         return rxn
+
+
+def _rotate_and_align_product_complex(product, reactant, n_iters):
+    """
+    Rotate the individual molecular components of the product complex
+    to align them against the reactant complex as much as possible
+    by checking RMSD
+    """
+    from scipy.optimize import minimize
+    import numpy as np
+
+    if product.n_molecules < 2:
+        logger.debug("No need to re-orient product")
+        return None
+
+    if product.n_molecules > 2:
+        raise NotImplementedError
+
+    if len(product.atom_indexes(0)) > len(product.atom_indexes(1)):
+        prod_complex_move_mol_idx = 1
+    else:
+        prod_complex_move_mol_idx = 0
+
+    logger.disabled = True
+    min_cost, opt_x = None, None
+
+    for _ in range(n_iters):
+        res = minimize(
+            _combined_rmsd_repulsion_cost,
+            x0=np.random.random(11),
+            method="BFGS",
+            tol=0.01,
+            args=(product, reactant, prod_complex_move_mol_idx),
+        )
+
+        if min_cost is None or res.fun < min_cost:
+            min_cost, opt_x = res.fun, res.x
+
+    logger.disabled = False
+    logger.info("Optimum orientation of product complex found")
+
+    product.rotate_mol(
+        axis=opt_x[:3], theta=opt_x[3], mol_index=prod_complex_move_mol_idx
+    )
+    product.translate_mol(vec=opt_x[4:7], mol_index=prod_complex_move_mol_idx)
+    product.rotate_mol(
+        axis=opt_x[7:10], theta=opt_x[10], mol_index=prod_complex_move_mol_idx
+    )
+    return None
+
+
+def _combined_rmsd_repulsion_cost(
+    x, product, reactant, prod_complex_move_mol_idx
+):
+    from autode.geom import calc_rmsd
+
+    moved_product = product.copy()
+
+    moved_product.rotate_mol(
+        axis=x[:3], theta=x[3], mol_index=prod_complex_move_mol_idx
+    )
+    moved_product.translate_mol(
+        vec=x[4:7], mol_index=prod_complex_move_mol_idx
+    )
+    moved_product.rotate_mol(
+        axis=x[7:10], theta=x[10], mol_index=prod_complex_move_mol_idx
+    )
+    repulsion = product.calc_repulsion(prod_complex_move_mol_idx)
+    rmsd = calc_rmsd(product.coordinates, reactant.coordinates)
+    return rmsd + repulsion
