@@ -670,7 +670,10 @@ class Reaction:
             rct_complex = self.reactant.copy()
             prod_complex = self.product.copy()
 
-        from autode.bond_rearrangement import get_bond_rearrangs
+        from autode.bond_rearrangement import (
+            get_bond_rearrangs,
+            BondRearrangement,
+        )
         from autode.transition_states.locate_tss import (
             translate_rotate_reactant,
         )
@@ -692,12 +695,9 @@ class Reaction:
                 bond_rearrangement=bond_rearr,
                 shift_factor=1.5 if rct_complex.charge == 0 else 2.5,
             )
-            translate_rotate_reactant(
-                prod_complex,
-                bond_rearrangement=bond_rearr,
-                shift_factor=1.5 if prod_complex.charge == 0 else 2.5,
-            )
-            # todo product rearrangement seems to not be working
+
+            # todo product alighnment is not working, maybe perform BFGS
+            # with vdW radii?
             # todo minimize product RMSD against reactant complex? will
             # also fix the NEB problem
             try:
