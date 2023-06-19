@@ -663,11 +663,13 @@ class Reaction:
         Will modify reactant and product geometries
         """
         from autode.bond_rearrangement import get_bond_rearrangs
+        from autode.bonds import BreakingBond, FormingBond
         from autode.transition_states.locate_tss import (
             translate_rotate_reactant,
         )
         from autode.mol_graphs import get_mapping, reac_graph_to_prod_graph
         from autode.exceptions import NoMapping
+        from autode.path.adaptive import AdaptivePath, pruned_active_bonds
 
         # need to optimise at least at low-level for double-ended TS search
         lmethod = get_lmethod()
@@ -698,30 +700,55 @@ class Reaction:
         for idx, bond_rearr in enumerate(bond_rearrs):
             assert bond_rearr.n_bbonds >= bond_rearr.n_fbonds
             # get optimal orientation and then minimise
+            rct_mapped = rct_complex.copy()
             translate_rotate_reactant(
-                reactant=rct_complex,
+                reactant=rct_mapped,
                 bond_rearrangement=bond_rearr,
-                shift_factor=1.5 if rct_complex.charge == 0 else 2.5,
+                shift_factor=1.5 if rct_mapped.charge == 0 else 2.5,
             )
-            rct_complex.optimise(method=lmethod)
 
-            # todo product alighnment is not working, maybe perform BFGS
-            # with vdW radii?
-            # todo minimize product RMSD against reactant complex? will
-            # also fix the NEB problem
             try:
                 mapping = get_mapping(
                     graph1=prod_complex.graph,
                     graph2=reac_graph_to_prod_graph(
-                        rct_complex.graph, bond_rearr
+                        rct_mapped.graph, bond_rearr
                     ),
                 )
+                # push all this into another function in tmp dir?
                 prod_copy = prod_complex.copy()
                 prod_copy.reorder_atoms(mapping)
-                prod_copy.print_xyz_file(
+
+                for i, pair in enumerate(bond_rearr.bbonds):
+                    bond_rearr.bbonds[i] = BreakingBond(
+                        pair, rct_mapped, prod_copy
+                    )
+
+                for i, pair in enumerate(bond_rearr.fbonds):
+                    bond_rearr.fbonds[i] = FormingBond(
+                        pair, rct_mapped, prod_copy
+                    )
+                path = AdaptivePath(
+                    init_species=rct_mapped,
+                    final_species=prod_copy,
+                    bonds=pruned_active_bonds(
+                        rct_mapped, bond_rearr.fbonds, bond_rearr.bbonds
+                    ),
+                    method=lmethod,
+                )
+                path.generate()
+                prod_mapped = path[-1]  # take last item
+
+                rct_mapped.optimise(method=lmethod)
+                prod_mapped.optimise(method=lmethod, reset_graph=True)
+
+                if not prod_mapped.graph.is_isomorphic_to(prod_copy.graph):
+                    raise RuntimeError
+
+                # todo align these
+                prod_mapped.print_xyz_file(
                     filename=f"{self.name}_product_ext_{idx}.xyz"
                 )
-                rct_complex.print_xyz_file(
+                rct_mapped.print_xyz_file(
                     filename=f"{self.name}_reactant_ext_{idx}.xyz"
                 )
             except NoMapping:
