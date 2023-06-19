@@ -11,7 +11,7 @@ from autode.transition_states.locate_tss import find_tss
 from autode.transition_states import TransitionState, TransitionStates
 from autode.exceptions import UnbalancedReaction, SolventsDontMatch
 from autode.log import logger
-from autode.methods import get_hmethod
+from autode.methods import get_hmethod, get_lmethod
 from autode.species.complex import ReactantComplex, ProductComplex
 from autode.species.molecule import Reactant, Product
 from autode.plotting import plot_reaction_profile
@@ -655,24 +655,13 @@ class Reaction:
 
         return None
 
-    def print_mapped_xyz_geometries(self, preopt_reacs_prods: bool = False):
+    def print_mapped_xyz_geometries(self):
         """
         Print the atom-mapped xyz geometries that can be fed into
         other external programs, or used for double ended TS search
-        like GSM
+        like GSM. Requires at least one available low-level method.
+        Will modify reactant and product geometries
         """
-        if preopt_reacs_prods:
-            self.optimise_reacs_prods()
-
-        if sum(p.graph.number_of_edges() for p in self.prods) > sum(
-            r.graph.number_of_edges() for r in self.reacs
-        ):
-            rct_complex = self.product.copy()
-            prod_complex = self.reactant.copy()
-        else:
-            rct_complex = self.reactant.copy()
-            prod_complex = self.product.copy()
-
         from autode.bond_rearrangement import get_bond_rearrangs
         from autode.transition_states.locate_tss import (
             translate_rotate_reactant,
@@ -680,22 +669,41 @@ class Reaction:
         from autode.mol_graphs import get_mapping, reac_graph_to_prod_graph
         from autode.exceptions import NoMapping
 
+        # need to optimise at least at low-level for double-ended TS search
+        lmethod = get_lmethod()
+        for mol in self.reacs + self.prods:
+            mol.optimise(method=lmethod)
+
+        # get copies so that originals are not modified
+        if sum(p.graph.number_of_edges() for p in self.prods) > sum(
+            r.graph.number_of_edges() for r in self.reacs
+        ):
+            logger.warning("Swtiching reactants and products")
+            rct_complex = self.product.copy()
+            prod_complex = self.reactant.copy()
+        else:
+            rct_complex = self.reactant.copy()
+            prod_complex = self.product.copy()
+
+        # go through all possible bond rearrangements
         bond_rearrs = get_bond_rearrangs(
             reactant=rct_complex,
             product=prod_complex,
             name=f"{self.name}_ext",
+            save=False,
         )
         if bond_rearrs is None:
             raise RuntimeError("Unable to find a bond rearrangement")
 
         for idx, bond_rearr in enumerate(bond_rearrs):
             assert bond_rearr.n_bbonds >= bond_rearr.n_fbonds
+            # get optimal orientation and then minimise
             translate_rotate_reactant(
                 reactant=rct_complex,
                 bond_rearrangement=bond_rearr,
                 shift_factor=1.5 if rct_complex.charge == 0 else 2.5,
             )
-            _rotate_and_align_product_complex(prod_complex, rct_complex)
+            rct_complex.optimise(method=lmethod)
 
             # todo product alighnment is not working, maybe perform BFGS
             # with vdW radii?
@@ -717,7 +725,10 @@ class Reaction:
                     filename=f"{self.name}_reactant_ext_{idx}.xyz"
                 )
             except NoMapping:
-                pass
+                logger.error(
+                    f"Unable to atom map for bond rearrangement"
+                    f" {str(bond_rearr)}"
+                )
 
     @checkpoint_rxn_profile_step("transition_state_conformers")
     @work_in("transition_states")
@@ -930,6 +941,25 @@ class Reaction:
         rxn = cls()
         rxn.load(filepath)
         return rxn
+
+
+def align_map_complexes_by_symmetry_rmsd(
+    complex_to_align: ProductComplex, base_complex: ReactantComplex, opt_method
+):
+    # conf gen first => large numbers
+    # then optimise
+    # then do mapping and check RMSD
+    from autode.utils import temporary_config
+
+    with temporary_config():
+        Config.num_complex_sphere_points = 30
+        # automatically optimised with lmethod
+        complex_to_align.populate_conformers()
+
+    for conf in complex_to_align.conformers:
+        # get the mapping with graph
+        pass
+    pass
 
 
 def _rotate_and_align_product_complex(product, reactant, n_iters: int = 10):
