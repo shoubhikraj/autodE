@@ -18,6 +18,7 @@ from autode.plotting import plot_reaction_profile
 from autode.values import Energy, PotentialEnergy, Enthalpy, FreeEnergy
 from autode.utils import (
     work_in,
+    work_in_tmp_dir,
     requires_hl_level_methods,
     checkpoint_rxn_profile_step,
 )
@@ -655,19 +656,16 @@ class Reaction:
 
         return None
 
-    def print_mapped_xyz_geometries(self):
-        """
-        Print the atom-mapped xyz geometries that can be fed into
-        other external programs, or used for double ended TS search
-        like GSM. Requires at least one available low-level method.
-        Will modify reactant and product geometries
-        """
+    @work_in_tmp_dir()
+    def _get_mapped_aligned_geometries(self):
         from autode.bond_rearrangement import get_bond_rearrangs
         from autode.transition_states.locate_tss import (
             translate_rotate_reactant,
         )
-        from autode.mol_graphs import get_mapping, reac_graph_to_prod_graph
         from autode.exceptions import NoMapping
+
+        possible_reacs = []
+        possible_prods = []
 
         # need to optimise at least at low-level for double-ended TS search
         lmethod = get_lmethod()
@@ -714,10 +712,6 @@ class Reaction:
                 shift_factor=1.5 if rct_mapped.charge == 0 else 2.5,
             )
 
-            # todo product alighnment is not working, maybe perform BFGS
-            # with vdW radii?
-            # todo minimize product RMSD against reactant complex? will
-            # also fix the NEB problem
             try:
 
                 prod_copy = prod_complex.copy()
@@ -726,18 +720,36 @@ class Reaction:
                         prod_copy, rct_mapped, bond_rearr
                     )
                 )
+                # Perform the actual alignment
                 _align_species(rct_mapped, prod_mapped)
-                rct_mapped.print_xyz_file(
-                    filename=f"{self.name}_product_ext_{idx}.xyz"
-                )
-                prod_mapped.print_xyz_file(
-                    filename=f"{self.name}_reactant_ext_{idx}.xyz"
-                )
+                possible_reacs.append(rct_mapped)
+                possible_prods.append(prod_mapped)
+
             except NoMapping:
                 logger.error(
                     f"Unable to atom map for bond rearrangement"
                     f" {str(bond_rearr)}"
                 )
+
+        return possible_reacs, possible_prods
+
+    def print_mapped_xyz_geometries(self):
+        """
+        Print the atom-mapped xyz geometries that can be fed into
+        other external programs, or used for double ended TS search
+        like GSM. Requires at least one available low-level method.
+        Will modify reactant and product geometries
+        """
+        reacs, prods = self._get_mapped_aligned_geometries()
+        assert len(reacs) == len(prods)
+
+        if len(reacs) == 0:
+            raise RuntimeError("No suitable reactant -> product graph mapping")
+
+        for i in range(len(reacs)):
+            reacs[i].print_xyz_file(f"{self.name}_reactant_ext_{i}.xyz")
+            prods[i].print_xyz_file(f"{self.name}_product_ext_{i}.xyz")
+        return None
 
     @checkpoint_rxn_profile_step("transition_state_conformers")
     @work_in("transition_states")
@@ -964,8 +976,8 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
     from autode.geom import calc_rmsd
     from networkx.algorithms import isomorphism
     from autode.mol_graphs import reac_graph_to_prod_graph
+    from autode.exceptions import NoMapping
 
-    # make the conf gen first in previous function?
     # does conf inherit graph, does changing graph
     # change conf?
     node_match = isomorphism.categorical_node_match("atom_label", "C")
@@ -980,6 +992,7 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
 
     n_trials = 0
     for mapping in gm.isomorphisms_iter():
+        # TODO: many same mapping. check for duplicates? or ISMAGS
         sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
         n_trials += 1
         if n_trials >= max_trials:
@@ -991,9 +1004,13 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
             rmsd = calc_rmsd(
                 conf_tmp.coordinates, reactant_complex.coordinates
             )
-
             if lowest_rmsd is None or rmsd < lowest_rmsd:
                 lowest_rmsd, aligned_conf = rmsd, conf_tmp
+
+    logger.info(f"Lowest RMSD of fit = {lowest_rmsd}")
+
+    if aligned_conf is None:
+        raise NoMapping("Unable to obtain isomorphism mapping")
 
     return aligned_conf
 
@@ -1022,5 +1039,5 @@ def _align_species(first_species, second_species):
     )
     rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
     rotated_p_mat = np.dot(rot_mat, p_mat.T).T
-    second_species.coordinates = rotated_p_mat
+    first_species.coordinates = rotated_p_mat
     return None
