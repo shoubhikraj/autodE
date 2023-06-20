@@ -679,10 +679,10 @@ class Reaction:
             r.graph.number_of_edges() for r in self.reacs
         ):
             logger.warning("Swtiching reactants and products")
-            rct_complex = self.product.copy()
+            rct_complex = self.product
             prod_complex = self.reactant.copy()
         else:
-            rct_complex = self.reactant.copy()
+            rct_complex = self.reactant
             prod_complex = self.product.copy()
 
         # go through all possible bond rearrangements
@@ -695,15 +695,24 @@ class Reaction:
         if bond_rearrs is None:
             raise RuntimeError("Unable to find a bond rearrangement")
 
+        # generate conformers if more than two items and optimise
+        prod_complex.populate_conformers()
+        prod_complex.conformers.prune(
+            e_tol=Energy(1e-6, "Ha"), rmsd_tol=0.1, remove_no_energy=True
+        )
+
         for idx, bond_rearr in enumerate(bond_rearrs):
             assert bond_rearr.n_bbonds >= bond_rearr.n_fbonds
-            # get optimal orientation and then minimise
+            # take copies as the orientations might be different
+            # for different bond rearrangements
+            rct_mapped = rct_complex.copy()
+
+            # get optimal orientation
             translate_rotate_reactant(
-                reactant=rct_complex,
+                reactant=rct_mapped,
                 bond_rearrangement=bond_rearr,
-                shift_factor=1.5 if rct_complex.charge == 0 else 2.5,
+                shift_factor=1.5 if rct_mapped.charge == 0 else 2.5,
             )
-            rct_complex.optimise(method=lmethod)
 
             # todo product alighnment is not working, maybe perform BFGS
             # with vdW radii?
@@ -717,7 +726,10 @@ class Reaction:
                     ),
                 )
                 prod_copy = prod_complex.copy()
-                prod_copy.reorder_atoms(mapping)
+                align_product_to_reactant_complexes_by_symmetry_rmsd(
+                    prod_copy, rct_mapped, bond_rearr
+                )
+
                 prod_copy.print_xyz_file(
                     filename=f"{self.name}_product_ext_{idx}.xyz"
                 )
@@ -943,37 +955,40 @@ class Reaction:
         return rxn
 
 
-def align_map_complexes_by_symmetry_rmsd(
-    complex_to_align: ProductComplex, base_complex: ReactantComplex, opt_method
+def align_product_to_reactant_complexes_by_symmetry_rmsd(
+    product_complex: ProductComplex,
+    reactant_complex: ReactantComplex,
+    bond_rearr,
+    max_trials: int = 30,
 ):
-    # conf gen first => large numbers
     # then optimise
     # then do mapping and check RMSD
     from autode.utils import temporary_config
     from autode.geom import calc_rmsd
     from networkx.algorithms import isomorphism
+    from autode.mol_graphs import reac_graph_to_prod_graph
 
     # make the conf gen first in previous function?
     # does conf inherit graph, does changing graph
     # change conf?
-
-    # automatically optimised with lmethod
-    complex_to_align.populate_conformers()
-    complex_to_align.conformers.prune(remove_no_energy=True)
-
     node_match = isomorphism.categorical_node_match("atom_label", "C")
-    automorphism = isomorphism.GraphMatcher(
-        complex_to_align.graph, complex_to_align.graph, node_match=node_match
+    gm = isomorphism.GraphMatcher(
+        product_complex.graph,
+        reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr),
+        node_match=node_match,
     )
     # todo check the logic of this function
-
+    assert len(product_complex.conformers) > 0, "Must have conformers"
     lowest_rmsd, lowest_conf = None, None
 
-    for _ in range(100):
-        mapping = next(automorphism.isomorphisms_iter())
-        for conf in complex_to_align.conformers:
-            conf.reorder_atoms(mapping=mapping)
-            rmsd = calc_rmsd(conf.coordinates, base_complex.coordinates)
+    for mapping in gm.isomorphisms_iter():
+        sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
+        for conf in product_complex.conformers:
+            conf_tmp = conf.copy()
+            conf_tmp.reorder_atoms(mapping=sorted_mapping)
+            rmsd = calc_rmsd(
+                conf_tmp.coordinates, reactant_complex.coordinates
+            )
 
             if rmsd is None or rmsd < lowest_rmsd:
                 lowest_rmsd, lowest_conf = rmsd, conf
