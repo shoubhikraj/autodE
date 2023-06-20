@@ -950,16 +950,35 @@ def align_map_complexes_by_symmetry_rmsd(
     # then optimise
     # then do mapping and check RMSD
     from autode.utils import temporary_config
+    from autode.geom import calc_rmsd
+    from networkx.algorithms import isomorphism
 
-    with temporary_config():
-        Config.num_complex_sphere_points = 30
-        # automatically optimised with lmethod
-        complex_to_align.populate_conformers()
+    # make the conf gen first in previous function?
+    # does conf inherit graph, does changing graph
+    # change conf?
 
-    for conf in complex_to_align.conformers:
-        # get the mapping with graph
-        pass
-    pass
+    # automatically optimised with lmethod
+    complex_to_align.populate_conformers()
+    complex_to_align.conformers.prune(remove_no_energy=True)
+
+    node_match = isomorphism.categorical_node_match("atom_label", "C")
+    automorphism = isomorphism.GraphMatcher(
+        complex_to_align.graph, complex_to_align.graph, node_match=node_match
+    )
+    # todo check the logic of this function
+
+    lowest_rmsd, lowest_conf = None, None
+
+    for _ in range(100):
+        mapping = next(automorphism.isomorphisms_iter())
+        for conf in complex_to_align.conformers:
+            conf.reorder_atoms(mapping=mapping)
+            rmsd = calc_rmsd(conf.coordinates, base_complex.coordinates)
+
+            if rmsd is None or rmsd < lowest_rmsd:
+                lowest_rmsd, lowest_conf = rmsd, conf
+
+    return lowest_conf
 
 
 def _rotate_and_align_product_complex(product, reactant, n_iters: int = 10):
