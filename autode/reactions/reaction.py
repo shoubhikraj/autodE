@@ -719,21 +719,18 @@ class Reaction:
             # todo minimize product RMSD against reactant complex? will
             # also fix the NEB problem
             try:
-                mapping = get_mapping(
-                    graph1=prod_complex.graph,
-                    graph2=reac_graph_to_prod_graph(
-                        rct_complex.graph, bond_rearr
-                    ),
-                )
-                prod_copy = prod_complex.copy()
-                align_product_to_reactant_complexes_by_symmetry_rmsd(
-                    prod_copy, rct_mapped, bond_rearr
-                )
 
-                prod_copy.print_xyz_file(
+                prod_copy = prod_complex.copy()
+                prod_mapped = (
+                    align_product_to_reactant_complexes_by_symmetry_rmsd(
+                        prod_copy, rct_mapped, bond_rearr
+                    )
+                )
+                _align_species(rct_mapped, prod_mapped)
+                rct_mapped.print_xyz_file(
                     filename=f"{self.name}_product_ext_{idx}.xyz"
                 )
-                rct_complex.print_xyz_file(
+                prod_mapped.print_xyz_file(
                     filename=f"{self.name}_reactant_ext_{idx}.xyz"
                 )
             except NoMapping:
@@ -979,10 +976,15 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
     )
     # todo check the logic of this function
     assert len(product_complex.conformers) > 0, "Must have conformers"
-    lowest_rmsd, lowest_conf = None, None
+    lowest_rmsd, aligned_conf = None, None
 
+    n_trials = 0
     for mapping in gm.isomorphisms_iter():
         sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
+        n_trials += 1
+        if n_trials >= max_trials:
+            break
+
         for conf in product_complex.conformers:
             conf_tmp = conf.copy()
             conf_tmp.reorder_atoms(mapping=sorted_mapping)
@@ -990,77 +992,35 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
                 conf_tmp.coordinates, reactant_complex.coordinates
             )
 
-            if rmsd is None or rmsd < lowest_rmsd:
-                lowest_rmsd, lowest_conf = rmsd, conf
+            if lowest_rmsd is None or rmsd < lowest_rmsd:
+                lowest_rmsd, aligned_conf = rmsd, conf_tmp
 
-    return lowest_conf
+    return aligned_conf
 
 
-def _rotate_and_align_product_complex(product, reactant, n_iters: int = 10):
-    """
-    Rotate the individual molecular components of the product complex
-    to align them against the reactant complex as much as possible
-    by checking RMSD
-    """
-    from scipy.optimize import minimize
+def _align_species(first_species, second_species):
     import numpy as np
+    from autode.geom import get_rot_mat_kabsch
 
-    if product.n_molecules < 2:
-        logger.debug("No need to re-orient product")
-        return None
-
-    if product.n_molecules > 2:
-        raise NotImplementedError
-
-    if len(product.atom_indexes(0)) > len(product.atom_indexes(1)):
-        prod_complex_move_mol_idx = 1
-    else:
-        prod_complex_move_mol_idx = 0
-
-    logger.disabled = True
-    min_cost, opt_x = None, None
-
-    for _ in range(n_iters):
-        res = minimize(
-            _combined_rmsd_repulsion_cost,
-            x0=np.random.random(11),
-            method="BFGS",
-            tol=0.01,
-            args=(product, reactant, prod_complex_move_mol_idx),
-        )
-
-        if min_cost is None or res.fun < min_cost:
-            min_cost, opt_x = res.fun, res.x
-
-    logger.disabled = False
-    logger.info("Optimum orientation of product complex found")
-
-    product.rotate_mol(
-        axis=opt_x[:3], theta=opt_x[3], mol_index=prod_complex_move_mol_idx
+    # first translate the molecules to the origin
+    logger.info(
+        "Translating initial_species (reactant) "
+        "and final_species (product) to origin"
     )
-    product.translate_mol(vec=opt_x[4:7], mol_index=prod_complex_move_mol_idx)
-    product.rotate_mol(
-        axis=opt_x[7:10], theta=opt_x[10], mol_index=prod_complex_move_mol_idx
+    p_mat = first_species.coordinates.copy()
+    p_mat -= np.average(p_mat, axis=0)
+    first_species.coordinates = p_mat
+
+    q_mat = second_species.coordinates.copy()
+    q_mat -= np.average(q_mat, axis=0)
+    second_species.coordinates = q_mat
+
+    logger.info(
+        "Rotating initial_species (reactant) "
+        "to align with final_species (product) "
+        "as much as possible"
     )
+    rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
+    rotated_p_mat = np.dot(rot_mat, p_mat.T).T
+    second_species.coordinates = rotated_p_mat
     return None
-
-
-def _combined_rmsd_repulsion_cost(
-    x, product, reactant, prod_complex_move_mol_idx
-):
-    from autode.geom import calc_rmsd
-
-    moved_product = product.copy()
-
-    moved_product.rotate_mol(
-        axis=x[:3], theta=x[3], mol_index=prod_complex_move_mol_idx
-    )
-    moved_product.translate_mol(
-        vec=x[4:7], mol_index=prod_complex_move_mol_idx
-    )
-    moved_product.rotate_mol(
-        axis=x[7:10], theta=x[10], mol_index=prod_complex_move_mol_idx
-    )
-    repulsion = moved_product.calc_repulsion(prod_complex_move_mol_idx)
-    rmsd = calc_rmsd(moved_product.coordinates, reactant.coordinates)
-    return rmsd + repulsion
