@@ -992,7 +992,7 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
 
     n_trials = 0
     for mapping in gm.isomorphisms_iter():
-        # TODO: many same mapping. check for duplicates? or ISMAGS
+        # TODO: use heavy atom matching
         sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
         n_trials += 1
         if n_trials >= max_trials:
