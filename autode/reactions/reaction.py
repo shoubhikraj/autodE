@@ -747,8 +747,12 @@ class Reaction:
             raise RuntimeError("No suitable reactant -> product graph mapping")
 
         for i in range(len(reacs)):
-            reacs[i].print_xyz_file(f"{self.name}_reactant_ext_{i}.xyz")
-            prods[i].print_xyz_file(f"{self.name}_product_ext_{i}.xyz")
+            reacs[i].print_xyz_file(
+                filename=f"{self.name}_reactant_ext_{i}.xyz"
+            )
+            prods[i].print_xyz_file(
+                filename=f"{self.name}_product_ext_{i}.xyz"
+            )
         return None
 
     @checkpoint_rxn_profile_step("transition_state_conformers")
@@ -983,8 +987,10 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
     # change conf?
     node_match = isomorphism.categorical_node_match("atom_label", "C")
     gm = isomorphism.GraphMatcher(
-        product_complex.graph,
-        reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr),
+        _get_heavy_atom_only_graph(product_complex.graph),
+        _get_heavy_atom_only_graph(
+            reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr)
+        ),
         node_match=node_match,
     )
     # todo check the logic of this function
@@ -1050,18 +1056,26 @@ def _align_species(first_species, second_species):
     import numpy as np
     from autode.geom import get_rot_mat_kabsch
 
+    # only heavy atoms
+    coords1 = np.array(
+        [atom.coord for atom in first_species.atoms if atom.label != "H"]
+    )
+    coords2 = np.array(
+        [atom.coord for atom in second_species.atoms if atom.label != "H"]
+    )
+
     # first translate the molecules to the origin
     logger.info(
         "Translating initial_species (reactant) "
         "and final_species (product) to origin"
     )
-    p_mat = first_species.coordinates.copy()
+    p_mat = coords1.copy()
     p_mat -= np.average(p_mat, axis=0)
-    first_species.coordinates = p_mat
+    first_species.coordinates -= np.average(p_mat, axis=0)
 
-    q_mat = second_species.coordinates.copy()
+    q_mat = coords2.copy()
     q_mat -= np.average(q_mat, axis=0)
-    second_species.coordinates = q_mat
+    second_species.coordinates -= np.average(q_mat, axis=0)
 
     logger.info(
         "Rotating initial_species (reactant) "
@@ -1069,6 +1083,6 @@ def _align_species(first_species, second_species):
         "as much as possible"
     )
     rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
-    rotated_p_mat = np.dot(rot_mat, p_mat.T).T
+    rotated_p_mat = np.dot(rot_mat, first_species.coordinates.T).T
     first_species.coordinates = rotated_p_mat
     return None
