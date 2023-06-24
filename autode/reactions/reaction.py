@@ -973,11 +973,12 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
     # then optimise
     # then do mapping and check RMSD
     from autode.utils import temporary_config
-    from autode.geom import calc_rmsd
+    from autode.geom import calc_heavy_atom_rmsd
     from networkx.algorithms import isomorphism
     from autode.mol_graphs import reac_graph_to_prod_graph
     from autode.exceptions import NoMapping
 
+    # TODO: first align reaction mapping in case H changes positions
     # does conf inherit graph, does changing graph
     # change conf?
     node_match = isomorphism.categorical_node_match("atom_label", "C")
@@ -990,29 +991,59 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
     assert len(product_complex.conformers) > 0, "Must have conformers"
     lowest_rmsd, aligned_conf = None, None
 
-    n_trials = 0
+    mappings = []
+    # get at most max_trials heavy atom mappings
     for mapping in gm.isomorphisms_iter():
-        # TODO: use heavy atom matching
-        sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
-        n_trials += 1
-        if n_trials >= max_trials:
+        if any(mapping == x for x in mappings):
+            continue
+        mappings.append(mapping)
+        if len(mappings) > max_trials:
             break
+
+    def add_h_atom_to_mapping_dict(heavy_mapping: dict):
+        # Add H atoms in any order, because we will match the H atoms
+        # at the end
+        missed_keys, missed_values = [], []
+        for i in range(product_complex.n_atoms):
+            if i not in heavy_mapping.keys():
+                missed_keys.append(i)
+            if i not in heavy_mapping.values():
+                missed_values.append(i)
+
+        missed_items = zip(missed_keys, missed_values)
+        heavy_mapping.update(dict(missed_items))
+
+    for mapping in mappings:
+        # TODO: use heavy atom matching
+        add_h_atom_to_mapping_dict(mapping)
+        sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
 
         for conf in product_complex.conformers:
             conf_tmp = conf.copy()
             conf_tmp.reorder_atoms(mapping=sorted_mapping)
-            rmsd = calc_rmsd(
-                conf_tmp.coordinates, reactant_complex.coordinates
-            )
+            rmsd = calc_heavy_atom_rmsd(conf_tmp.atoms, reactant_complex.atoms)
             if lowest_rmsd is None or rmsd < lowest_rmsd:
                 lowest_rmsd, aligned_conf = rmsd, conf_tmp
 
-    logger.info(f"Lowest RMSD of fit = {lowest_rmsd}")
+    logger.info(f"Lowest heavy-atom RMSD of fit = {lowest_rmsd}")
 
     if aligned_conf is None:
-        raise NoMapping("Unable to obtain isomorphism mapping")
+        raise NoMapping("Unable to obtain isomorphism mapping for heavy atom")
+
+    # TODO: then align according to heavy atoms, and use Hungarian algorithm to
+    # deal with hydrogens
 
     return aligned_conf
+
+
+def _get_heavy_atom_only_graph(mol_graph):
+    import networkx as nx
+
+    heavy_atom_graph = nx.subgraph_view(
+        mol_graph,
+        filter_node=lambda x: mol_graph.nodes[x]["atom_label"] != "H",
+    )
+    return heavy_atom_graph
 
 
 def _align_species(first_species, second_species):
