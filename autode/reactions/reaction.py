@@ -986,11 +986,13 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
     # does conf inherit graph, does changing graph
     # change conf?
     node_match = isomorphism.categorical_node_match("atom_label", "C")
+    prod_h_graph = _get_heavy_atom_only_graph(product_complex.graph)
+    reac_h_graph = _get_heavy_atom_only_graph(
+        reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr)
+    )
     gm = isomorphism.GraphMatcher(
-        _get_heavy_atom_only_graph(product_complex.graph),
-        _get_heavy_atom_only_graph(
-            reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr)
-        ),
+        product_complex.graph,
+        reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr),
         node_match=node_match,
     )
     # todo check the logic of this function
@@ -1043,12 +1045,13 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
 
 
 def _get_heavy_atom_only_graph(mol_graph):
-    import networkx as nx
 
-    heavy_atom_graph = nx.subgraph_view(
-        mol_graph,
-        filter_node=lambda x: mol_graph.nodes[x]["atom_label"] != "H",
-    )
+    heavy_atom_graph = mol_graph.copy()
+    for i in list(heavy_atom_graph):
+        # iterate through nodes
+        if heavy_atom_graph.nodes[i]["atom_label"] == "H":
+            heavy_atom_graph.remove_node(i)
+
     return heavy_atom_graph
 
 
