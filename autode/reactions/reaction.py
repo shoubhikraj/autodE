@@ -715,13 +715,13 @@ class Reaction:
             try:
 
                 prod_copy = prod_complex.copy()
-                prod_mapped = (
-                    align_product_to_reactant_complexes_by_symmetry_rmsd(
-                        prod_copy, rct_mapped, bond_rearr
-                    )
+                (
+                    rct_mapped,
+                    prod_mapped,
+                ) = align_product_to_reactant_complexes_by_symmetry_rmsd(
+                    prod_copy, rct_mapped, bond_rearr
                 )
-                # Perform the actual alignment
-                _align_species(rct_mapped, prod_mapped)
+
                 possible_reacs.append(rct_mapped)
                 possible_prods.append(prod_mapped)
 
@@ -968,6 +968,18 @@ class Reaction:
         return rxn
 
 
+def _get_heavy_and_active_h_atom_indices(reactant, bond_rearr):
+    selected_atoms = set()
+    for idx, atom in enumerate(reactant.atoms):
+        if atom.label != "H":
+            selected_atoms.add(idx)
+
+    for pairs in bond_rearr.all:
+        selected_atoms.update(pairs)
+
+    return list(selected_atoms)
+
+
 def align_product_to_reactant_complexes_by_symmetry_rmsd(
     product_complex: ProductComplex,
     reactant_complex: ReactantComplex,
@@ -976,109 +988,92 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
 ):
     # then optimise
     # then do mapping and check RMSD
-    from autode.utils import temporary_config
-    from autode.geom import calc_heavy_atom_rmsd
+    from autode.geom import calc_rmsd
     from networkx.algorithms import isomorphism
     from autode.mol_graphs import reac_graph_to_prod_graph
     from autode.exceptions import NoMapping
 
+    # extract only heavy atoms and any hydrogens involved in reaction
+    fit_atom_idxs = _get_heavy_and_active_h_atom_indices(
+        reactant_complex, bond_rearr
+    )
+
+    # NOTE: multiple reaction mappings possible due to symmetry, e.g., 3 hydrogens
+    # in -CH3 are symmetric/equivalent in 2D. We choose unique mappings where the
+    # mapping of heavy atoms (or hydrogens involved in reaction) change, to reduce
+    # the complexity of the problem.
+    node_match = isomorphism.categorical_node_match("atom_label", "C")
+    gm = isomorphism.GraphMatcher(
+        reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr),
+        product_complex.graph,
+        node_match=node_match,
+    )
+    assert len(product_complex.conformers) > 0, "Must have conformer(s)"
+
+    unique_mappings = []
+
+    def is_mapping_unique(full_map):
+        for this_map in unique_mappings:
+            if all(this_map[i] == full_map[i] for i in fit_atom_idxs):
+                return False
+        return True
+
+    # collect at most <max_trials> number of unique mappings
+    for mapping in gm.isomorphisms_iter():
+        if is_mapping_unique(mapping):
+            unique_mappings.append(mapping)
+        if len(unique_mappings) > max_trials:
+            break
     # TODO: first align reaction mapping in case H changes positions
     # does conf inherit graph, does changing graph
     # change conf?
-    node_match = isomorphism.categorical_node_match("atom_label", "C")
-    prod_h_graph = _get_heavy_atom_only_graph(product_complex.graph)
-    reac_h_graph = _get_heavy_atom_only_graph(
-        reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr)
-    )
-    gm = isomorphism.GraphMatcher(
-        product_complex.graph,
-        reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr),
-        node_match=node_match,
-    )
     # todo check the logic of this function
-    assert len(product_complex.conformers) > 0, "Must have conformers"
-    lowest_rmsd, aligned_conf = None, None
+    lowest_rmsd, aligned_rct, aligned_prod = None, None, None
 
-    mappings = []
-    # get at most max_trials heavy atom mappings
-    for mapping in gm.isomorphisms_iter():
-        if any(mapping == x for x in mappings):
-            continue
-        mappings.append(mapping)
-        if len(mappings) > max_trials:
-            break
+    for mapping in unique_mappings:
 
-    def add_h_atom_to_mapping_dict(heavy_mapping: dict):
-        # Add H atoms in any order, because we will match the H atoms
-        # at the end
-        missed_keys, missed_values = [], []
-        for i in range(product_complex.n_atoms):
-            if i not in heavy_mapping.keys():
-                missed_keys.append(i)
-            if i not in heavy_mapping.values():
-                missed_values.append(i)
-
-        missed_items = zip(missed_keys, missed_values)
-        heavy_mapping.update(dict(missed_items))
-
-    for mapping in mappings:
-        # TODO: use heavy atom matching
-        add_h_atom_to_mapping_dict(mapping)
         sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
+        rct_aligned = reactant_complex.copy()
+        rct_aligned.reorder_atoms(sorted_mapping)
 
         for conf in product_complex.conformers:
-            conf_tmp = conf.copy()
-            conf_tmp.reorder_atoms(mapping=sorted_mapping)
-            rmsd = calc_heavy_atom_rmsd(conf_tmp.atoms, reactant_complex.atoms)
+            rmsd = calc_rmsd(conf.coordinates, rct_aligned.coordinates)
             if lowest_rmsd is None or rmsd < lowest_rmsd:
-                lowest_rmsd, aligned_conf = rmsd, conf_tmp
+                lowest_rmsd, aligned_rct, aligned_prod = (
+                    rmsd,
+                    rct_aligned,
+                    conf.copy(),
+                )
 
     logger.info(f"Lowest heavy-atom RMSD of fit = {lowest_rmsd}")
 
-    if aligned_conf is None:
+    if aligned_rct is None:
         raise NoMapping("Unable to obtain isomorphism mapping for heavy atom")
+    # TODO: clean up function
 
     # TODO: then align according to heavy atoms, and use Hungarian algorithm to
     # deal with hydrogens
+    _align_species(aligned_rct, aligned_prod)
 
-    return aligned_conf
-
-
-def _get_heavy_atom_only_graph(mol_graph):
-
-    heavy_atom_graph = mol_graph.copy()
-    for i in list(heavy_atom_graph):
-        # iterate through nodes
-        if heavy_atom_graph.nodes[i]["atom_label"] == "H":
-            heavy_atom_graph.remove_node(i)
-
-    return heavy_atom_graph
+    return aligned_rct, aligned_prod
 
 
 def _align_species(first_species, second_species):
     import numpy as np
     from autode.geom import get_rot_mat_kabsch
 
-    # only heavy atoms
-    coords1 = np.array(
-        [atom.coord for atom in first_species.atoms if atom.label != "H"]
-    )
-    coords2 = np.array(
-        [atom.coord for atom in second_species.atoms if atom.label != "H"]
-    )
-
     # first translate the molecules to the origin
     logger.info(
         "Translating initial_species (reactant) "
         "and final_species (product) to origin"
     )
-    p_mat = coords1.copy()
+    p_mat = first_species.coordinates.copy()
     p_mat -= np.average(p_mat, axis=0)
-    first_species.coordinates -= np.average(p_mat, axis=0)
+    first_species.coordinates = p_mat
 
-    q_mat = coords2.copy()
+    q_mat = first_species.coordinates.copy()
     q_mat -= np.average(q_mat, axis=0)
-    second_species.coordinates -= np.average(q_mat, axis=0)
+    second_species.coordinates = q_mat
 
     logger.info(
         "Rotating initial_species (reactant) "
@@ -1086,6 +1081,6 @@ def _align_species(first_species, second_species):
         "as much as possible"
     )
     rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
-    rotated_p_mat = np.dot(rot_mat, first_species.coordinates.T).T
+    rotated_p_mat = np.dot(rot_mat, p_mat.T).T
     first_species.coordinates = rotated_p_mat
     return None
