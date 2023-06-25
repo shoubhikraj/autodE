@@ -657,17 +657,32 @@ class Reaction:
         return None
 
     @work_in_tmp_dir()
-    def _get_mapped_aligned_geometries(self):
+    def _get_mapped_aligned_geometries(self, react_orient: bool):
+        """
+        Performs tha mapping and alignment of reactant and product
+        complexes and returns the most optimal pair based on RMSD.
+        If the reactant or product are complexes, then random
+        orientations are generated, and then minimised at low-level.
+        (For the reactant it can be over-ridden to use an orientation
+        guessed from the bond rearrangment with the argument react_orient)
+
+        Args:
+            react_orient: If True, the reactant complex orientation
+                          is set according to the bond rearrangement
+
+        Returns:
+
+        """
         from autode.bond_rearrangement import get_bond_rearrangs
+        from autode.conformers import Conformer
         from autode.transition_states.locate_tss import (
             translate_rotate_reactant,
         )
         from autode.exceptions import NoMapping
 
-        possible_reacs = []
-        possible_prods = []
+        possible_reacs_prods = []
 
-        # need to optimise at least at low-level for double-ended TS search
+        # need to optimise at least at low-level for reliable geometries
         lmethod = get_lmethod()
         for mol in self.reacs + self.prods:
             mol.optimise(method=lmethod)
@@ -677,10 +692,10 @@ class Reaction:
             r.graph.number_of_edges() for r in self.reacs
         ):
             logger.warning("Swtiching reactants and products")
-            rct_complex = self.product
+            rct_complex = self.product.copy()
             prod_complex = self.reactant.copy()
         else:
-            rct_complex = self.reactant
+            rct_complex = self.reactant.copy()
             prod_complex = self.product.copy()
 
         # go through all possible bond rearrangements
@@ -694,36 +709,49 @@ class Reaction:
             raise RuntimeError("Unable to find a bond rearrangement")
 
         # generate conformers if more than two items and optimise
-        prod_complex.populate_conformers()
-        prod_complex.conformers.prune(
-            e_tol=Energy(1e-6, "Ha"), rmsd_tol=0.1, remove_no_energy=True
-        )
+        if prod_complex.n_molecules > 1:
+            prod_complex.populate_conformers()
+            prod_complex.conformers.prune(
+                e_tol=Energy(1e-6, "Ha"), rmsd_tol=0.1, remove_no_energy=True
+            )
+        else:
+            prod_complex.conformers.append(prod_complex.copy())
+        if not react_orient:
+            rct_complex.populate_conformers()
+            rct_complex.conformers.prune(
+                e_tol=Energy(1e-6, "Ha"), rmsd_tol=0.1, remove_no_energy=True
+            )
 
         for idx, bond_rearr in enumerate(bond_rearrs):
             assert bond_rearr.n_bbonds >= bond_rearr.n_fbonds
-            # take copies as the orientations might be different
-            # for different bond rearrangements
-            rct_mapped = rct_complex.copy()
 
-            # get optimal orientation
-            translate_rotate_reactant(
-                reactant=rct_mapped,
-                bond_rearrangement=bond_rearr,
-                shift_factor=1.5 if rct_mapped.charge == 0 else 2.5,
-            )
+            if react_orient:
+                # take copies as the orientations might be different
+                # for different bond rearrangements
+                rct_oriented = rct_complex.copy()
+
+                # get optimal orientation
+                translate_rotate_reactant(
+                    reactant=rct_oriented,
+                    bond_rearrangement=bond_rearr,
+                    shift_factor=1.5 if rct_oriented.charge == 0 else 2.5,
+                )
+                # conformer is then just a copy of the chosen orientation
+                rct_oriented.conformers.append(rct_oriented.copy())
+            else:
+                # no need to orient, just assign
+                rct_oriented = rct_complex
 
             try:
 
-                prod_copy = prod_complex.copy()
                 (
                     rct_mapped,
                     prod_mapped,
                 ) = align_product_to_reactant_complexes_by_symmetry_rmsd(
-                    prod_copy, rct_mapped, bond_rearr
+                    prod_complex, rct_oriented, bond_rearr
                 )
 
-                possible_reacs.append(rct_mapped)
-                possible_prods.append(prod_mapped)
+                possible_reacs_prods.append((rct_mapped, prod_mapped))
 
             except NoMapping:
                 logger.error(
@@ -731,27 +759,38 @@ class Reaction:
                     f" {str(bond_rearr)}"
                 )
 
-        return possible_reacs, possible_prods
+        return possible_reacs_prods
 
-    def print_mapped_xyz_geometries(self):
+    def print_mapped_xyz_geometries(
+        self, use_reactive_orientation: bool = True
+    ):
         """
         Print the atom-mapped xyz geometries that can be fed into
         other external programs, or used for double ended TS search
         like GSM. Requires at least one available low-level method.
-        Will modify reactant and product geometries
-        """
-        reacs, prods = self._get_mapped_aligned_geometries()
-        assert len(reacs) == len(prods)
+        Will modify reactant and product geometries.
 
-        if len(reacs) == 0:
+        Args:
+            use_reactive_orientation (bool): In case there are multiple
+                                reactants, whether to use the optimal
+                                orientation of the complex estimated from
+                                the bond rearrangement. If False, will
+                                minimise RMSD against optimised geometries
+                                from random orientations
+        """
+        reacs_prods = self._get_mapped_aligned_geometries(
+            use_reactive_orientation
+        )
+
+        if len(reacs_prods) == 0:
             raise RuntimeError("No suitable reactant -> product graph mapping")
 
-        for i in range(len(reacs)):
-            reacs[i].print_xyz_file(
-                filename=f"{self.name}_reactant_ext_{i}.xyz"
+        for idx, pair in enumerate(reacs_prods):
+            pair[0].print_xyz_file(
+                filename=f"{self.name}_reactant_ext_{idx}.xyz"
             )
-            prods[i].print_xyz_file(
-                filename=f"{self.name}_product_ext_{i}.xyz"
+            pair[1].print_xyz_file(
+                filename=f"{self.name}_product_ext_{idx}.xyz"
             )
         return None
 
@@ -1033,23 +1072,26 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
     for mapping in unique_mappings:
 
         sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
-        rct_aligned = reactant_complex.copy()
-        rct_aligned.reorder_atoms(sorted_mapping)
 
-        for conf in product_complex.conformers:
-            rmsd = calc_rmsd(conf.coordinates, rct_aligned.coordinates)
-            if lowest_rmsd is None or rmsd < lowest_rmsd:
-                lowest_rmsd, aligned_rct, aligned_prod = (
-                    rmsd,
-                    rct_aligned,
-                    conf.copy(),
-                )
+        for rct_conf in reactant_complex.conformers:
+            # take copy to avoid permanent reordering
+            rct_tmp = rct_conf.copy()
+            rct_tmp.reorder_atoms(sorted_mapping)
+            # TODO: get RMSD by chosen atoms only
+
+            for conf in product_complex.conformers:
+                rmsd = calc_rmsd(conf.coordinates, rct_tmp.coordinates)
+                if lowest_rmsd is None or rmsd < lowest_rmsd:
+                    lowest_rmsd, aligned_rct, aligned_prod = (
+                        rmsd,
+                        rct_tmp,
+                        conf.copy(),
+                    )
 
     logger.info(f"Lowest heavy-atom RMSD of fit = {lowest_rmsd}")
 
     if aligned_rct is None:
         raise NoMapping("Unable to obtain isomorphism mapping for heavy atom")
-    # TODO: clean up function
 
     # TODO: then align according to heavy atoms, and use Hungarian algorithm to
     # deal with hydrogens
@@ -1071,7 +1113,7 @@ def _align_species(first_species, second_species):
     p_mat -= np.average(p_mat, axis=0)
     first_species.coordinates = p_mat
 
-    q_mat = first_species.coordinates.copy()
+    q_mat = second_species.coordinates.copy()
     q_mat -= np.average(q_mat, axis=0)
     second_species.coordinates = q_mat
 
