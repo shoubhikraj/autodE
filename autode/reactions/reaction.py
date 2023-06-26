@@ -3,13 +3,17 @@ import base64
 import hashlib
 import pickle
 
-from typing import Union, Optional, List, Generator
+from typing import Union, Optional, List, Generator, TYPE_CHECKING, Tuple
 from datetime import date
 from autode.config import Config
 from autode.solvent.solvents import get_solvent
-from autode.transition_states.locate_tss import find_tss
+from autode.transition_states.locate_tss import (
+    find_tss,
+    translate_rotate_reactant,
+)
+from autode.bond_rearrangement import get_bond_rearrangs
 from autode.transition_states import TransitionState, TransitionStates
-from autode.exceptions import UnbalancedReaction, SolventsDontMatch
+from autode.exceptions import UnbalancedReaction, SolventsDontMatch, NoMapping
 from autode.log import logger
 from autode.methods import get_hmethod, get_lmethod
 from autode.species.complex import ReactantComplex, ProductComplex
@@ -23,6 +27,10 @@ from autode.utils import (
     checkpoint_rxn_profile_step,
 )
 from autode.reactions import reaction_types
+
+if TYPE_CHECKING:
+    from autode.species import Species
+    from autode.bond_rearrangement import BondRearrangement
 
 
 class Reaction:
@@ -657,7 +665,9 @@ class Reaction:
         return None
 
     @work_in_tmp_dir()
-    def _get_mapped_aligned_geometries(self, react_orient: bool):
+    def _get_mapped_aligned_geometries(
+        self, react_orient: bool
+    ) -> List[tuple]:
         """
         Performs tha mapping and alignment of reactant and product
         complexes and returns the most optimal pair based on RMSD.
@@ -671,15 +681,8 @@ class Reaction:
                           is set according to the bond rearrangement
 
         Returns:
-
+            (list[tuple[Species]]): List of tuples of aligned reactant/product pairs
         """
-        from autode.bond_rearrangement import get_bond_rearrangs
-        from autode.conformers import Conformer
-        from autode.transition_states.locate_tss import (
-            translate_rotate_reactant,
-        )
-        from autode.exceptions import NoMapping
-
         possible_reacs_prods = []
 
         # need to optimise at least at low-level for reliable geometries
@@ -706,7 +709,7 @@ class Reaction:
             save=False,
         )
         if bond_rearrs is None:
-            raise RuntimeError("Unable to find a bond rearrangement")
+            raise RuntimeError("Unable to find any bond rearrangements")
 
         # generate conformers if more than two items and optimise
         if prod_complex.n_molecules > 1:
@@ -716,6 +719,7 @@ class Reaction:
             )
         else:
             prod_complex.conformers.append(prod_complex.copy())
+        # for reactant, optimal orientation is probably better
         if not react_orient:
             rct_complex.populate_conformers()
             rct_complex.conformers.prune(
@@ -747,7 +751,7 @@ class Reaction:
                 (
                     rct_mapped,
                     prod_mapped,
-                ) = align_product_to_reactant_complexes_by_symmetry_rmsd(
+                ) = align_product_to_reactant_by_symmetry_rmsd(
                     prod_complex, rct_oriented, bond_rearr
                 )
 
@@ -1007,7 +1011,21 @@ class Reaction:
         return rxn
 
 
-def _get_heavy_and_active_h_atom_indices(reactant, bond_rearr):
+def _get_heavy_and_active_h_atom_indices(
+    reactant: "Species", bond_rearr: "BondRearrangement"
+) -> List[int]:
+    """
+    Obtain all the heavy atoms, and only those hydrogens that are
+    involved in the reaction, informed by the bond rearrangement
+
+    Args:
+        reactant (Species): The reactant species
+        bond_rearr (BondRearrangement): The bond rearrangement from reactant
+                                        to form product
+
+    Returns:
+        (list[int]): The indices of the heavy atoms, and the active hydrogens
+    """
     selected_atoms = set()
     for idx, atom in enumerate(reactant.atoms):
         if atom.label != "H":
@@ -1019,14 +1037,32 @@ def _get_heavy_and_active_h_atom_indices(reactant, bond_rearr):
     return list(selected_atoms)
 
 
-def align_product_to_reactant_complexes_by_symmetry_rmsd(
+def align_product_to_reactant_by_symmetry_rmsd(
     product_complex: ProductComplex,
     reactant_complex: ReactantComplex,
     bond_rearr,
-    max_trials: int = 30,
-):
-    # then optimise
-    # then do mapping and check RMSD
+    max_trials: int = 50,
+) -> Tuple["Species"]:
+    """
+    Aligns a product complex against a reactant complex for a given
+    bond rearrangement by iterating through all possible graph
+    isomorphisms for the heavy atoms (and any active H), and then
+    checking the RMSD on those selected atoms only. Non-active hydrogens
+    are not checked due to combinatorial explosion that makes this
+    difficult. Assumes that the product complex and reactant complex
+    have at least one conformer (orientation of one molecule against
+    another, in case there is only one molecule in complex, conformer
+    must be a copy of the current geometry)
+
+    Args:
+        product_complex: The product complex (must have at least one conf)
+        reactant_complex: The reactant complex (must have at least one conf)
+        bond_rearr: The bond rearrangement
+        max_trials: Maximum number of heavy-atom isomorphisms to check against
+
+    Returns:
+
+    """
     from autode.geom import calc_rmsd
     from networkx.algorithms import isomorphism
     from autode.mol_graphs import reac_graph_to_prod_graph
@@ -1063,9 +1099,6 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
             unique_mappings.append(mapping)
         if len(unique_mappings) > max_trials:
             break
-    # TODO: first align reaction mapping in case H changes positions
-    # does conf inherit graph, does changing graph
-    # change conf?
     # todo check the logic of this function
     lowest_rmsd, aligned_rct, aligned_prod = None, None, None
 
@@ -1100,15 +1133,12 @@ def align_product_to_reactant_complexes_by_symmetry_rmsd(
     return aligned_rct, aligned_prod
 
 
-def _align_species(first_species, second_species):
+def _align_species(first_species: "Species", second_species: "Species"):
     import numpy as np
     from autode.geom import get_rot_mat_kabsch
 
+    logger.info("Aligning species by translation and rotation")
     # first translate the molecules to the origin
-    logger.info(
-        "Translating initial_species (reactant) "
-        "and final_species (product) to origin"
-    )
     p_mat = first_species.coordinates.copy()
     p_mat -= np.average(p_mat, axis=0)
     first_species.coordinates = p_mat
