@@ -1099,6 +1099,11 @@ def align_product_to_reactant_by_symmetry_rmsd(
             unique_mappings.append(mapping)
         if len(unique_mappings) > max_trials:
             break
+
+    logger.info(
+        f"Obtained {len(unique_mappings)} possible mappings "
+        f"based on heavy and active atoms"
+    )
     # todo check the logic of this function
     lowest_rmsd = None
     aligned_rct: Optional["Species"] = None
@@ -1113,7 +1118,6 @@ def align_product_to_reactant_by_symmetry_rmsd(
             rct_tmp = rct_conf.copy()
             rct_tmp.reorder_atoms(sorted_mapping)
             mapped_atom_idxs = [sorted_mapping[i] for i in fit_atom_idxs]
-            # TODO: get RMSD by chosen atoms only
 
             for conf in product_complex.conformers:
                 rmsd = calc_rmsd_on_atom_indices(
@@ -1133,7 +1137,8 @@ def align_product_to_reactant_by_symmetry_rmsd(
 
     # TODO: then align according to heavy atoms, and use Hungarian algorithm to
     # deal with hydrogens
-    _align_species(aligned_rct, aligned_prod)
+    # TODO: do we need Hungarian? OR is a stereo-check fine
+    _align_species(aligned_rct, aligned_prod, fit_atom_idxs)
 
     return aligned_rct, aligned_prod
 
@@ -1148,7 +1153,8 @@ def calc_rmsd_on_atom_indices(
     Args:
         first_species (Species):
         second_species (Species):
-        atom_idxs (Species):
+        atom_idxs (list[int]): Indices of atoms to be considered when
+                               calculating the RMSD
 
     Returns:
         (float): The calculated root mean squared deviation
@@ -1182,15 +1188,25 @@ def _align_species(
     import numpy as np
     from autode.geom import get_rot_mat_kabsch
 
+    assert first_species.n_atoms == second_species.n_atoms
+
+    if atom_idxs is not None:
+        atom_idxs = sorted(atom_idxs)
+    else:
+        atom_idxs = list(range(first_species.n_atoms))
+
+    p_mat = np.array([first_species.atoms[i].coord for i in atom_idxs])
+    q_mat = np.array([second_species.atoms[i].coord for i in atom_idxs])
+
     logger.info("Aligning species by translation and rotation")
     # first translate the molecules to the origin
-    p_mat = first_species.coordinates.copy()
-    p_mat -= np.average(p_mat, axis=0)
-    first_species.coordinates = p_mat
+    first_transl = np.average(p_mat, axis=0)
+    first_species.coordinates -= first_transl
+    p_mat -= first_transl
 
-    q_mat = second_species.coordinates.copy()
-    q_mat -= np.average(q_mat, axis=0)
-    second_species.coordinates = q_mat
+    second_transl = np.average(q_mat, axis=0)
+    second_species.coordinates -= second_transl
+    q_mat -= second_transl
 
     logger.info(
         "Rotating initial_species (reactant) "
@@ -1198,6 +1214,6 @@ def _align_species(
         "as much as possible"
     )
     rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
-    rotated_p_mat = np.dot(rot_mat, p_mat.T).T
-    first_species.coordinates = rotated_p_mat
+    first_rotated = np.dot(rot_mat, first_species.coordinates.T).T
+    first_species.coordinates = first_rotated
     return None
