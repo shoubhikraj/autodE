@@ -1042,7 +1042,7 @@ def align_product_to_reactant_by_symmetry_rmsd(
     reactant_complex: ReactantComplex,
     bond_rearr,
     max_trials: int = 50,
-) -> Tuple["Species"]:
+) -> Tuple["Species", "Species"]:
     """
     Aligns a product complex against a reactant complex for a given
     bond rearrangement by iterating through all possible graph
@@ -1061,9 +1061,9 @@ def align_product_to_reactant_by_symmetry_rmsd(
         max_trials: Maximum number of heavy-atom isomorphisms to check against
 
     Returns:
-
+        (tuple[Species, Species]): The aligned reactant and product geometries
     """
-    from autode.geom import calc_rmsd
+    from autode.geom import calc_rmsd, calc_heavy_atom_rmsd
     from networkx.algorithms import isomorphism
     from autode.mol_graphs import reac_graph_to_prod_graph
     from autode.exceptions import NoMapping
@@ -1100,7 +1100,9 @@ def align_product_to_reactant_by_symmetry_rmsd(
         if len(unique_mappings) > max_trials:
             break
     # todo check the logic of this function
-    lowest_rmsd, aligned_rct, aligned_prod = None, None, None
+    lowest_rmsd = None
+    aligned_rct: Optional["Species"] = None
+    aligned_prod: Optional["Species"] = None
 
     for mapping in unique_mappings:
 
@@ -1110,10 +1112,13 @@ def align_product_to_reactant_by_symmetry_rmsd(
             # take copy to avoid permanent reordering
             rct_tmp = rct_conf.copy()
             rct_tmp.reorder_atoms(sorted_mapping)
+            mapped_atom_idxs = [sorted_mapping[i] for i in fit_atom_idxs]
             # TODO: get RMSD by chosen atoms only
 
             for conf in product_complex.conformers:
-                rmsd = calc_rmsd(conf.coordinates, rct_tmp.coordinates)
+                rmsd = calc_rmsd_on_atom_indices(
+                    conf, rct_tmp, mapped_atom_idxs
+                )
                 if lowest_rmsd is None or rmsd < lowest_rmsd:
                     lowest_rmsd, aligned_rct, aligned_prod = (
                         rmsd,
@@ -1123,7 +1128,7 @@ def align_product_to_reactant_by_symmetry_rmsd(
 
     logger.info(f"Lowest heavy-atom RMSD of fit = {lowest_rmsd}")
 
-    if aligned_rct is None:
+    if aligned_rct is None or aligned_prod is None:
         raise NoMapping("Unable to obtain isomorphism mapping for heavy atom")
 
     # TODO: then align according to heavy atoms, and use Hungarian algorithm to
@@ -1133,7 +1138,47 @@ def align_product_to_reactant_by_symmetry_rmsd(
     return aligned_rct, aligned_prod
 
 
-def _align_species(first_species: "Species", second_species: "Species"):
+def calc_rmsd_on_atom_indices(
+    first_species: "Species", second_species: "Species", atom_idxs: List[int]
+):
+    """
+    Calculate the RMSD of two species by only considering the selected
+    atoms (provided by indices)
+
+    Args:
+        first_species (Species):
+        second_species (Species):
+        atom_idxs (Species):
+
+    Returns:
+        (float): The calculated root mean squared deviation
+    """
+    import numpy as np
+    from autode.geom import calc_rmsd
+
+    coords1 = np.array([first_species.atoms[i].coord for i in atom_idxs])
+    coords2 = np.array([second_species.atoms[i].coord for i in atom_idxs])
+
+    return calc_rmsd(coords1, coords2)
+
+
+def _align_species(
+    first_species: "Species",
+    second_species: "Species",
+    atom_idxs: Optional[List[int]] = None,
+) -> None:
+    """
+    Align two species in space by translating the centroid of each
+    geometry to origin and then applying the optimal rotation by
+    using the Kabsch algorithm. Optionally, only align by selected
+    atom indices. Both species objects are modified in-place.
+
+    Args:
+        first_species (Species):
+        second_species (Species):
+        atom_idxs (list[int]|None): Indices of selected atoms by which to
+                                    align the species
+    """
     import numpy as np
     from autode.geom import get_rot_mat_kabsch
 
