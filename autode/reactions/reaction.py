@@ -1037,6 +1037,64 @@ def _get_heavy_and_active_h_atom_indices(
     return list(selected_atoms)
 
 
+def align_h_atom_groups(
+    first_species: "Species", second_species: "Species", h_atom_idxs: List[int]
+):
+    """
+    Align the H atoms groups attached to an atom by trying all permutations
+    and then selecting the one with lowest RMSD. Note that the species must
+    be atom-mapped to each other.
+
+    Args:
+        first_species:
+        second_species:
+        h_atom_idxs: Atom indices of the H atoms that should be aligned,
+                     avoiding any active H atoms participating in reaction
+    """
+    from typing import Dict
+
+    # check that the species are atom mapped
+    assert first_species.atomic_symbols == second_species.atomic_symbols
+    # check that the indices are unique
+    assert len(h_atom_idxs) == len(set(h_atom_idxs))
+
+    failed_msg = (
+        "Unusual molecular connectivity, automatic alignment of "
+        "non-reacting H atoms is not feasible, returning the "
+        "unmodified geometry"
+    )
+
+    # get groups of h_atoms
+    h_atom_groups: Dict[int, tuple] = {}
+    for idx in h_atom_idxs:
+        n_bnds_to_h = first_species.graph.degree[idx]
+        # detached H atom, unusual, but may happen; simply ignore
+        if n_bnds_to_h == 0:
+            continue
+        elif n_bnds_to_h == 1:
+            neighbour = first_species.graph.neighbors(idx)[0]
+            # neighbour can't be another H-atom to be aligned
+            if neighbour in h_atom_idxs:
+                logger.error(failed_msg)
+                return first_species, second_species
+            # check if this atom is already in a group before processing
+            if any(idx in group for group in h_atom_groups.values()):
+                continue
+            # get all the neighbours of the neighbour
+            attached_atoms = first_species.graph.neighbors(neighbour)
+            other_h_in_group = [i for i in h_atom_idxs if i in attached_atoms]
+            assert neighbour not in h_atom_groups
+            h_atom_groups[neighbour] = (idx, *other_h_in_group)
+        else:
+            # 2 or more bonds for hydrogen means unusual geometry
+            logger.error(failed_msg)
+            return first_species, second_species
+
+    # now process the H atoms by trying different permutations
+
+    pass
+
+
 def align_product_to_reactant_by_symmetry_rmsd(
     product_complex: ProductComplex,
     reactant_complex: ReactantComplex,
