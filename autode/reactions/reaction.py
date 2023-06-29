@@ -1140,6 +1140,46 @@ def _align_h_atom_groups_by_permutation(
                 pass
 
 
+def align_by_neighbours(
+    first_species, second_species, centre, h_atoms, neighbours=None
+):
+    from autode import Molecule
+    from autode.geom import calc_rmsd
+    import itertools
+
+    if neighbours is None:
+        neighbours = []
+    assert len(h_atoms) > 1
+    atoms2 = [second_species.atoms[i] for i in h_atoms]
+    atoms2 += [second_species.atoms[i] for i in neighbours]
+    atoms2.append(second_species.atoms[centre])
+    frag2 = Molecule(atoms=atoms2)
+    # TODO align copies of species before hand if there are neighbours
+
+    lowest_rmsd, best_perm = None, None
+    for perm in itertools.permutations(h_atoms):
+        atom_indices = (
+            list(perm)
+            + neighbours
+            + [
+                centre,
+            ]
+        )
+        frag1 = Molecule(atoms=[first_species.atoms[i] for i in atom_indices])
+        rmsd = calc_rmsd(frag1.coordinates, frag2.coordinates)
+        if lowest_rmsd is None or rmsd < lowest_rmsd:
+            lowest_rmsd = rmsd
+            best_perm = list(perm)
+
+    mapping = dict(zip(h_atoms, best_perm))
+    for i in range(len(first_species.n_atoms)):
+        if i not in mapping:
+            mapping[i] = i
+    first_species.reorder_atoms(mapping)
+
+    pass
+
+
 def align_product_to_reactant_by_symmetry_rmsd(
     product_complex: ProductComplex,
     reactant_complex: ReactantComplex,
