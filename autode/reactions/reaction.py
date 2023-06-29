@@ -3,7 +3,7 @@ import base64
 import hashlib
 import pickle
 
-from typing import Union, Optional, List, Generator, TYPE_CHECKING, Tuple
+from typing import Union, Optional, List, Generator, TYPE_CHECKING, Tuple, Dict
 from datetime import date
 from autode.config import Config
 from autode.solvent.solvents import get_solvent
@@ -1058,41 +1058,86 @@ def align_h_atom_groups(
     # check that the indices are unique
     assert len(h_atom_idxs) == len(set(h_atom_idxs))
 
-    failed_msg = (
-        "Unusual molecular connectivity, automatic alignment of "
-        "non-reacting H atoms is not feasible, returning the "
-        "unmodified geometry"
-    )
+    failed_msg = ()
 
-    # get groups of h_atoms
-    h_atom_groups: Dict[int, tuple] = {}
+    # get groups of h_atoms <= {centre: attached-H's}
+    h_atom_groups: Dict[int, List[int]] = {}
     for idx in h_atom_idxs:
         n_bnds_to_h = first_species.graph.degree[idx]
         # detached H atom, unusual, but may happen; simply ignore
         if n_bnds_to_h == 0:
             continue
         elif n_bnds_to_h == 1:
-            neighbour = first_species.graph.neighbors(idx)[0]
-            # neighbour can't be another H-atom to be aligned
-            if neighbour in h_atom_idxs:
-                logger.error(failed_msg)
-                return first_species, second_species
-            # check if this atom is already in a group before processing
-            if any(idx in group for group in h_atom_groups.values()):
+            centre = first_species.graph.neighbors(idx)[0]
+            # if centre is another h-atom, align is not possible due to symm.
+            if centre in h_atom_idxs:
+                logger.warning("H-H bond detected, alignment is no possible")
                 continue
-            # get all the neighbours of the neighbour
-            attached_atoms = first_species.graph.neighbors(neighbour)
-            other_h_in_group = [i for i in h_atom_idxs if i in attached_atoms]
-            assert neighbour not in h_atom_groups
-            h_atom_groups[neighbour] = (idx, *other_h_in_group)
+            # check if this centre is in the register
+            if centre not in h_atom_groups:
+                h_atom_groups[centre] = [
+                    idx,
+                ]
+            else:
+                h_atom_groups[centre].append(idx)
         else:
-            # 2 or more bonds for hydrogen means unusual geometry
-            logger.error(failed_msg)
-            return first_species, second_species
+            # 2 or more bonds for hydrogen means unusual geometry, skip
+            logger.error(
+                "More than 2 formal bonds defined for hydrogen atom"
+                "skipping alignment"
+            )
+            continue
 
     # now process the H atoms by trying different permutations
-
     pass
+
+
+def _align_h_atom_groups_by_permutation(
+    first_species,
+    second_species,
+    h_atom_groups: Dict[int, List[int]],
+    bond_rearr: "BondRearrangement",
+    h_indices,
+):
+    from autode.species import Molecule
+
+    for centre, h_atoms in h_atom_groups.items():
+        assert len(h_atoms) > 0
+        if len(h_atoms) == 1:
+            # nothing to be done here
+            continue
+        elif len(h_atoms) == 2:
+            # 2 H-atoms has symmetry, so get other neighbours of centre
+            centre_neighbours = set(first_species.graph.neighbors(centre))
+            centre_neighbours = centre_neighbours.difference(
+                set(bond_rearr.active_atoms)
+            )
+            centre_neighbours = centre_neighbours.difference(set(h_indices))
+            if len(centre_neighbours) == 0:
+                logger.warning(
+                    f"Alignment of H-atoms attached to {centre} is not possible"
+                )
+                continue
+        else:  # >= 3
+            # test if other fragment is planar, if not then there is no symmetry
+            # so it can be directly aligned by permutation
+            frag = Molecule(
+                atoms=[
+                    first_species[i]
+                    for i in (
+                        [
+                            centre,
+                        ]
+                        + h_atoms
+                    )
+                ]
+            )
+            if frag.is_planar:
+                pass
+                # use neighbours to perform alignment
+            else:
+                # align with only the central atom
+                pass
 
 
 def align_product_to_reactant_by_symmetry_rmsd(
