@@ -1053,6 +1053,7 @@ def align_h_atom_groups(
         second_species:
         h_atom_idxs: Atom indices of the H atoms that should be aligned,
                      avoiding any active H atoms participating in reaction
+        bond_rearr: Bond rearrangement
     """
     from typing import Dict
 
@@ -1060,8 +1061,6 @@ def align_h_atom_groups(
     assert first_species.atomic_symbols == second_species.atomic_symbols
     # check that the indices are unique
     assert len(h_atom_idxs) == len(set(h_atom_idxs))
-
-    failed_msg = ()
 
     # get groups of h_atoms <= {centre: attached-H's}
     h_atom_groups: Dict[int, List[int]] = {}
@@ -1096,9 +1095,7 @@ def align_h_atom_groups(
     _align_h_atom_groups_by_permutation(
         first_species, second_species, h_atom_groups, bond_rearr
     )
-
-    # now process the H atoms by trying different permutations
-    pass
+    return None
 
 
 def _align_h_atom_groups_by_permutation(
@@ -1106,7 +1103,6 @@ def _align_h_atom_groups_by_permutation(
     second_species,
     h_atom_groups: Dict[int, List[int]],
     bond_rearr: "BondRearrangement",
-    h_indices,
 ):
     # TODO: always align with neighbour non-participating atoms?
     from autode.atoms import Atoms
@@ -1120,35 +1116,36 @@ def _align_h_atom_groups_by_permutation(
         if len(h_atoms) == 1:
             # nothing to be done here
             continue
-        elif len(h_atoms) == 2:
-            # 2 H-atoms has symmetry, so get other neighbours of centre
+        else:  # len(h_atoms) >= 2
+            # get all neighbours of centre that are not active or H
             centre_neighbours = set(first_species.graph.neighbors(centre))
             centre_neighbours = centre_neighbours.difference(
                 set(bond_rearr.active_atoms)
             )
             centre_neighbours = centre_neighbours.difference(set(h_indices))
-            if len(centre_neighbours) == 0:
+            # 2 H means one plane of symmetry, no neighbour so impossible to align
+            if len(h_atoms) == 2 and len(centre_neighbours) == 0:
                 logger.warning(
-                    f"Alignment of H-atoms attached to {centre} is not possible"
+                    f"Alignment of H-atoms attached to atom-"
+                    f"{centre} is not possible"
                 )
                 continue
+            # with 3 or more alignment is possible if not planar
+            if len(centre_neighbours) == 0 and len(h_atoms) >= 3:
+                frag = Atoms([first_species[i] for i in ([centre] + h_atoms)])
+                if frag.are_planar():
+                    logger.warning(
+                        f"Planar set of hydrogens around atom {centre},"
+                        f" unable to align"
+                    )
+                    continue
             align_by_neighbours(
                 first_species,
                 second_species,
                 centre,
                 h_atoms,
-                centre_neighbours,
+                list(centre_neighbours),
             )
-        else:  # >= 3
-            # test if other fragment is planar, if not then there is no symmetry
-            # so it can be directly aligned by permutation
-            frag = Atoms([first_species[i] for i in ([centre] + h_atoms)])
-            if frag.are_planar():
-                pass
-                # use neighbours to perform alignment
-            else:
-                # align with only the central atom
-                pass
 
 
 def align_by_neighbours(
@@ -1181,7 +1178,6 @@ def align_by_neighbours(
         if i not in mapping:
             mapping[i] = i
     first_species.reorder_atoms(mapping)
-
     return None
 
 
