@@ -1038,7 +1038,10 @@ def _get_heavy_and_active_h_atom_indices(
 
 
 def align_h_atom_groups(
-    first_species: "Species", second_species: "Species", h_atom_idxs: List[int]
+    first_species: "Species",
+    second_species: "Species",
+    h_atom_idxs: List[int],
+    bond_rearr,
 ):
     """
     Align the H atoms groups attached to an atom by trying all permutations
@@ -1071,22 +1074,28 @@ def align_h_atom_groups(
             centre = first_species.graph.neighbors(idx)[0]
             # if centre is another h-atom, align is not possible due to symm.
             if centre in h_atom_idxs:
-                logger.warning("H-H bond detected, alignment is no possible")
+                logger.warning(
+                    f"H{centre}-H{idx} bond detected, alignment"
+                    f" is not possible, skipping"
+                )
                 continue
             # check if this centre is in the register
             if centre not in h_atom_groups:
-                h_atom_groups[centre] = [
-                    idx,
-                ]
+                h_atom_groups[centre] = [idx]
             else:
                 h_atom_groups[centre].append(idx)
         else:
             # 2 or more bonds for hydrogen means unusual geometry, skip
             logger.error(
-                "More than 2 formal bonds defined for hydrogen atom"
-                "skipping alignment"
+                "More than 2 formal bonds defined for hydrogen atom "
+                f"skipping alignment of H-{idx}"
             )
             continue
+
+    logger.info(f"Obtained {len(h_atom_groups)} groups of hydrogens")
+    _align_h_atom_groups_by_permutation(
+        first_species, second_species, h_atom_groups, bond_rearr
+    )
 
     # now process the H atoms by trying different permutations
     pass
@@ -1099,7 +1108,12 @@ def _align_h_atom_groups_by_permutation(
     bond_rearr: "BondRearrangement",
     h_indices,
 ):
-    from autode.species import Molecule
+    # TODO: always align with neighbour non-participating atoms?
+    from autode.atoms import Atoms
+
+    h_indices = []
+    for group in h_atom_groups.values():
+        h_indices += list(group)
 
     for centre, h_atoms in h_atom_groups.items():
         assert len(h_atoms) > 0
@@ -1118,21 +1132,18 @@ def _align_h_atom_groups_by_permutation(
                     f"Alignment of H-atoms attached to {centre} is not possible"
                 )
                 continue
+            align_by_neighbours(
+                first_species,
+                second_species,
+                centre,
+                h_atoms,
+                centre_neighbours,
+            )
         else:  # >= 3
             # test if other fragment is planar, if not then there is no symmetry
             # so it can be directly aligned by permutation
-            frag = Molecule(
-                atoms=[
-                    first_species[i]
-                    for i in (
-                        [
-                            centre,
-                        ]
-                        + h_atoms
-                    )
-                ]
-            )
-            if frag.is_planar:
+            frag = Atoms([first_species[i] for i in ([centre] + h_atoms)])
+            if frag.are_planar():
                 pass
                 # use neighbours to perform alignment
             else:
@@ -1145,6 +1156,7 @@ def align_by_neighbours(
 ):
     from autode import Molecule
     from autode.geom import calc_rmsd
+    import numpy as np
     import itertools
 
     if neighbours is None:
@@ -1153,20 +1165,13 @@ def align_by_neighbours(
     atoms2 = [second_species.atoms[i] for i in h_atoms]
     atoms2 += [second_species.atoms[i] for i in neighbours]
     atoms2.append(second_species.atoms[centre])
-    frag2 = Molecule(atoms=atoms2)
-    # TODO align copies of species before hand if there are neighbours
+    coords2 = np.array([x.coord for x in atoms2])
 
     lowest_rmsd, best_perm = None, None
     for perm in itertools.permutations(h_atoms):
-        atom_indices = (
-            list(perm)
-            + neighbours
-            + [
-                centre,
-            ]
-        )
-        frag1 = Molecule(atoms=[first_species.atoms[i] for i in atom_indices])
-        rmsd = calc_rmsd(frag1.coordinates, frag2.coordinates)
+        perm_atoms1 = [centre] + list(perm) + neighbours
+        coords1 = np.array([first_species.atoms[i].coord for i in perm_atoms1])
+        rmsd = calc_rmsd(coords1, coords2)
         if lowest_rmsd is None or rmsd < lowest_rmsd:
             lowest_rmsd = rmsd
             best_perm = list(perm)
@@ -1177,7 +1182,7 @@ def align_by_neighbours(
             mapping[i] = i
     first_species.reorder_atoms(mapping)
 
-    pass
+    return None
 
 
 def align_product_to_reactant_by_symmetry_rmsd(
