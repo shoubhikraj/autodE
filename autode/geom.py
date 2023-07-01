@@ -1,9 +1,12 @@
 import numpy as np
 
-from typing import Sequence
+from typing import Sequence, List, Optional, TYPE_CHECKING
 from scipy.spatial.distance import cdist
 from scipy.spatial import distance_matrix
 from autode.log import logger
+
+if TYPE_CHECKING:
+    from autode.species.species import Species
 
 
 def are_coords_reasonable(coords: np.ndarray) -> bool:
@@ -225,6 +228,73 @@ def calc_rmsd(coords1: np.ndarray, coords2: np.ndarray) -> float:
 
     fitted_coords = np.dot(rot_mat, p_mat.T).T
     return np.sqrt(np.average(np.square(fitted_coords - q_mat)))
+
+
+def calc_rmsd_on_atom_indices(
+    first_species: "Species", second_species: "Species", atom_idxs: List[int]
+) -> float:
+    """
+    Calculate the RMSD of two species by only considering the selected
+    atoms (provided by indices)
+
+    Args:
+        first_species (Species):
+        second_species (Species):
+        atom_idxs (list[int]): Indices of atoms to be considered when
+                               calculating the RMSD
+
+    Returns:
+        (float): The calculated root mean squared deviation
+    """
+
+    coords1 = np.array([first_species.atoms[i].coord for i in atom_idxs])
+    coords2 = np.array([second_species.atoms[i].coord for i in atom_idxs])
+
+    return calc_rmsd(coords1, coords2)
+
+
+def align_species(
+    first_species: "Species",
+    second_species: "Species",
+    atom_idxs: Optional[List[int]] = None,
+) -> None:
+    """
+    Align two species in space by translating the centroid of each
+    geometry to origin and then applying the optimal rotation by
+    using the Kabsch algorithm. Optionally, only align by selected
+    atom indices. Both species objects are modified in-place.
+
+    Args:
+        first_species (Species):
+        second_species (Species):
+        atom_idxs (list[int]|None): Indices of selected atoms by which to
+                                    align the species
+    """
+    assert first_species.n_atoms == second_species.n_atoms
+
+    if atom_idxs is not None:
+        atom_idxs = sorted(atom_idxs)
+        assert max(atom_idxs) < first_species.n_atoms
+    else:
+        atom_idxs = list(range(first_species.n_atoms))
+
+    p_mat = np.array([first_species.atoms[i].coord for i in atom_idxs])
+    q_mat = np.array([second_species.atoms[i].coord for i in atom_idxs])
+
+    logger.info("Aligning species by translation and rotation")
+
+    first_transl = np.average(p_mat, axis=0)
+    first_species.coordinates -= first_transl
+    p_mat -= first_transl
+
+    second_transl = np.average(q_mat, axis=0)
+    second_species.coordinates -= second_transl
+    q_mat -= second_transl
+
+    rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
+    first_rotated = np.dot(rot_mat, first_species.coordinates.T).T
+    first_species.coordinates = first_rotated
+    return None
 
 
 def get_points_on_sphere(n_points: int, r: float = 1) -> Sequence[np.ndarray]:

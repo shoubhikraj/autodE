@@ -1,11 +1,15 @@
 from copy import deepcopy
 import numpy as np
-from typing import Optional, Union, List, Sequence
+from typing import Optional, Union, List, Sequence, Tuple, TYPE_CHECKING
 from autode.atoms import Atom, Atoms
 from itertools import product as iterprod
 from scipy.spatial import distance_matrix
 from autode.log import logger
-from autode.geom import get_points_on_sphere
+from autode.geom import (
+    get_points_on_sphere,
+    calc_rmsd_on_atom_indices,
+    align_species,
+)
 from autode.solvent.solvents import get_solvent
 from autode.mol_graphs import union
 from autode.species.species import Species
@@ -14,6 +18,9 @@ from autode.config import Config
 from autode.methods import get_lmethod
 from autode.conformers import Conformer
 from autode.exceptions import MethodUnavailable
+
+if TYPE_CHECKING:
+    from autode.bond_rearrangement import BondRearrangement
 
 
 def get_complex_conformer_atoms(molecules, rotations, points):
@@ -466,3 +473,131 @@ class ProductComplex(Complex):
 
 class NCIComplex(Complex):
     """Non covalent interaction complex"""
+
+
+def align_product_to_reactant_by_symmetry_rmsd(
+    product_complex: Complex,
+    reactant_complex: Complex,
+    bond_rearr: "BondRearrangement",
+    max_maps: int = 50,
+) -> Tuple["Species", "Species"]:
+    """
+    Aligns a product complex against a reactant complex for a given
+    bond rearrangement by iterating through all possible graph
+    isomorphisms for the heavy atoms (and any active H), and then
+    checking the RMSD on those selected atoms only. Assumes that the
+    product complex and reactant complex have at least one conformer
+    (in case there is only one molecule, the conformer must be a copy
+    of the complex geometry)
+
+    Args:
+        product_complex: The product complex (must have at least one conf)
+        reactant_complex: The reactant complex (must have at least one conf)
+        bond_rearr: The bond rearrangement
+        max_maps: Maximum number of heavy-atom isomorphism maps to check against
+
+    Returns:
+        (tuple[Species, Species]): The aligned reactant and product geometries
+    """
+    from networkx.algorithms import isomorphism
+    from autode.mol_graphs import reac_graph_to_prod_graph
+    from autode.exceptions import NoMapping
+
+    assert len(reactant_complex.conformers) > 0
+    assert len(product_complex.conformers) > 0
+
+    # extract only heavy atoms and any hydrogens involved in reaction
+    fit_atom_idxs = _get_heavy_and_active_h_atom_indices(
+        reactant_complex, bond_rearr
+    )
+
+    # NOTE: multiple reaction mappings possible due to symmetry, e.g., 3 hydrogens
+    # in -CH3 are symmetric/equivalent in 2D. We choose unique mappings where the
+    # mapping of heavy atoms (or hydrogens involved in reaction) change, to reduce
+    # the complexity of the problem.
+    node_match = isomorphism.categorical_node_match("atom_label", "C")
+    gm = isomorphism.GraphMatcher(
+        reac_graph_to_prod_graph(reactant_complex.graph, bond_rearr),
+        product_complex.graph,
+        node_match=node_match,
+    )
+    assert len(product_complex.conformers) > 0, "Must have conformer(s)"
+
+    unique_mappings = []
+
+    def is_mapping_unique(full_map):
+        for this_map in unique_mappings:
+            if all(this_map[i] == full_map[i] for i in fit_atom_idxs):
+                return False
+        return True
+
+    # collect at most <max_trials> number of unique mappings
+    for mapping in gm.isomorphisms_iter():
+        if is_mapping_unique(mapping):
+            unique_mappings.append(mapping)
+        if len(unique_mappings) > max_maps:
+            break
+
+    logger.info(
+        f"Obtained {len(unique_mappings)} possible mappings "
+        f"based on heavy and active atoms"
+    )
+    # todo check the logic of this function
+    lowest_rmsd = None
+    aligned_rct: Optional["Species"] = None
+    aligned_prod: Optional["Species"] = None
+
+    for mapping in unique_mappings:
+
+        sorted_mapping = {i: mapping[i] for i in sorted(mapping)}
+
+        for rct_conf in reactant_complex.conformers:
+            # take copy to avoid permanent reordering
+            rct_tmp = rct_conf.copy()
+            rct_tmp.reorder_atoms(sorted_mapping)
+            mapped_atom_idxs = [sorted_mapping[i] for i in fit_atom_idxs]
+
+            for conf in product_complex.conformers:
+                rmsd = calc_rmsd_on_atom_indices(
+                    conf, rct_tmp, mapped_atom_idxs
+                )
+                if lowest_rmsd is None or rmsd < lowest_rmsd:
+                    lowest_rmsd = rmsd
+                    aligned_rct, aligned_prod = rct_tmp, conf.copy()
+
+    logger.info(f"Lowest heavy-atom RMSD of fit = {lowest_rmsd}")
+
+    if aligned_rct is None or aligned_prod is None:
+        raise NoMapping("Unable to obtain isomorphism from bond rearrangment")
+
+    align_species(aligned_rct, aligned_prod, fit_atom_idxs)
+    # TODO: align the hydrogens by fragments => below map is wrong as changed
+    h_atoms_idxs = set(range(aligned_rct.n_atoms)).difference(fit_atom_idxs)
+
+    return aligned_rct, aligned_prod
+
+
+def _get_heavy_and_active_h_atom_indices(
+    reactant: Species, bond_rearr: "BondRearrangement"
+) -> List[int]:
+    """
+    Obtain all the heavy atoms, and only those hydrogens that are
+    involved in the reaction, informed by the bond rearrangement
+
+    Args:
+        reactant (Species): The reactant species
+        bond_rearr (BondRearrangement): The bond rearrangement from reactant
+                                        to form product
+
+    Returns:
+        (list[int]): The indices of the heavy atoms, and the active hydrogens
+    """
+    selected_atoms = set()
+    for idx, atom in enumerate(reactant.atoms):
+        if atom.label != "H":
+            selected_atoms.add(idx)
+
+    for pairs in bond_rearr.all:
+        selected_atoms.update(pairs)
+
+    return list(selected_atoms)
