@@ -1070,7 +1070,7 @@ def align_h_atom_groups(
         if n_bnds_to_h == 0:
             continue
         elif n_bnds_to_h == 1:
-            centre = first_species.graph.neighbors(idx)[0]
+            centre = next(first_species.graph.neighbors(idx))
             # if centre is another h-atom, align is not possible due to symm.
             if centre in h_atom_idxs:
                 logger.warning(
@@ -1086,7 +1086,7 @@ def align_h_atom_groups(
         else:
             # 2 or more bonds for hydrogen means unusual geometry, skip
             logger.error(
-                "More than 2 formal bonds defined for hydrogen atom "
+                "Two or more formal bonds defined for hydrogen atom "
                 f"skipping alignment of H-{idx}"
             )
             continue
@@ -1283,6 +1283,10 @@ def align_product_to_reactant_by_symmetry_rmsd(
     # deal with hydrogens
     # TODO: do we need Hungarian? OR is a stereo-check fine
     _align_species(aligned_rct, aligned_prod, fit_atom_idxs)
+    h_atoms_idxs = set(range(aligned_rct.n_atoms)).difference(fit_atom_idxs)
+    align_h_atom_groups(
+        aligned_rct, aligned_prod, list(h_atoms_idxs), bond_rearr
+    )
 
     return aligned_rct, aligned_prod
 
