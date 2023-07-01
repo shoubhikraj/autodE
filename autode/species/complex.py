@@ -1,3 +1,4 @@
+import itertools
 from copy import deepcopy
 import numpy as np
 from typing import Optional, Union, List, Sequence, Tuple, TYPE_CHECKING
@@ -9,6 +10,7 @@ from autode.geom import (
     get_points_on_sphere,
     calc_rmsd_on_atom_indices,
     align_species,
+    calc_rmsd,
 )
 from autode.solvent.solvents import get_solvent
 from autode.mol_graphs import union
@@ -601,3 +603,109 @@ def _get_heavy_and_active_h_atom_indices(
         selected_atoms.update(pairs)
 
     return list(selected_atoms)
+
+
+class _FragmentGroup:
+    """
+    Denotes a fragment of a molecule consisting of a central atom,
+    some hydrogens attached to it, and non-hydrogen neighbours of
+    the central atom
+    """
+
+    def __init__(self, centre, hydrogens, neighbours):
+        self.centre = int(centre)
+        self.hydrogens = list(hydrogens)
+        self.neighbours = list(neighbours)
+
+    @property
+    def n_hs(self) -> int:
+        return len(self.hydrogens)
+
+    @property
+    def n_neighbours(self) -> int:
+        return len(self.neighbours)
+
+    def permutate_hs(self) -> list:
+        """Return all indices of atoms, but with permuting hydrogens"""
+        for perm in itertools.permutations(self.hydrogens):
+            frag_idxs = [self.centre] + list(perm) + self.neighbours
+            yield frag_idxs
+
+    def get_fragment(self, mol, perm=None) -> Atoms:
+        if perm is None:
+            perm = [self.centre] + list(self.hydrogens) + self.neighbours
+
+        frag = Atoms([mol.atoms[i] for i in perm])
+        return frag
+
+
+def get_hydrogen_groups(
+    first_species: Species, active_idxs: List[int]
+) -> List[_FragmentGroup]:
+
+    fragments = []
+    # all the hydrogen atoms that are not active
+    h_idxs = [
+        i
+        for i in range(first_species.n_atoms)
+        if first_species.atoms[i].label == "H"
+    ]
+    h_idxs = list(set(h_idxs).difference(active_idxs))
+    used_h_idxs = []
+    for idx in h_idxs:
+        if idx in used_h_idxs:
+            continue
+        n_bonds_to_h = first_species.graph.degree[idx]
+        if n_bonds_to_h == 0:
+            # zero bonds, isolated H atom, no need to permute
+            continue
+        elif n_bonds_to_h > 1:
+            logger.warning(
+                f"Unusual geometry - H{idx} has more than one bonds"
+                f" skipping alignment"
+            )
+            continue
+        # now there should be only one bond to H
+        assert len(list(first_species.graph.neighbors(idx))) == 1
+        centre = list(first_species.graph.neighbors(idx))[0]
+        centre_neighbours = list(first_species.graph.neighbors(centre))
+        # collect all H's attached to centre
+        all_hs = [x for x in centre_neighbours if x in h_idxs]
+        all_hs.append(idx)
+        used_h_idxs.extend(all_hs)
+        # get other heavy, non-active atoms
+        non_hs = [x for x in centre_neighbours if x not in h_idxs]
+        non_hs = list(set(non_hs).difference(active_idxs))
+        fragments.append(_FragmentGroup(centre, all_hs, non_hs))
+
+    return fragments
+
+
+def align_h_groups_by_permutation(
+    first_species, second_species, h_groups: List[_FragmentGroup]
+):
+    for frag_group in h_groups:
+        if frag_group.n_hs == 1:
+            # only one-H, nothing to be done
+            continue
+        elif frag_group.n_hs >= 2 or frag_group.n_neighbours == 0:
+            fragment = frag_group.get_fragment(first_species)
+            if fragment.are_planar() or fragment.are_linear():
+                logger.warning(
+                    f"Unable to align H{frag_group.hydrogens} due to symmetry"
+                )
+                continue
+        best_rmsd, best_mapping = None, None
+        for perm in frag_group.permutate_hs():
+            frag1 = frag_group.get_fragment(first_species, perm)
+            frag2 = frag_group.get_fragment(second_species)
+            rmsd = calc_rmsd(frag1.coordinates, frag2.coordinates)
+            if best_rmsd is None or rmsd < best_rmsd:
+                best_rmsd = rmsd
+                best_mapping = dict(zip(frag_group.hydrogens, perm))
+
+        full_mapping = {i for i in range(first_species.n_atoms)}
+        full_mapping.update(best_mapping)
+        first_species.reorder_atoms(full_mapping)
+
+    return None
