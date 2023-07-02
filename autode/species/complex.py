@@ -548,6 +548,7 @@ def align_product_to_reactant_by_symmetry_rmsd(
     lowest_rmsd = None
     aligned_rct: Optional["Species"] = None
     aligned_prod: Optional["Species"] = None
+    best_mapping = None
 
     for mapping in unique_mappings:
 
@@ -564,6 +565,7 @@ def align_product_to_reactant_by_symmetry_rmsd(
                     conf, rct_tmp, mapped_atom_idxs
                 )
                 if lowest_rmsd is None or rmsd < lowest_rmsd:
+                    best_mapping = sorted_mapping
                     lowest_rmsd = rmsd
                     aligned_rct, aligned_prod = rct_tmp, conf.copy()
 
@@ -574,7 +576,9 @@ def align_product_to_reactant_by_symmetry_rmsd(
 
     align_species(aligned_rct, aligned_prod, fit_atom_idxs)
     # TODO: align the hydrogens by fragments => below map is wrong as changed
-    h_atoms_idxs = set(range(aligned_rct.n_atoms)).difference(fit_atom_idxs)
+    active_idxs = [best_mapping[i] for i in bond_rearr.active_atoms]
+    h_groups = get_hydrogen_groups(aligned_rct, active_idxs)
+    align_h_groups_by_permutation(aligned_rct, aligned_prod, h_groups)
 
     return aligned_rct, aligned_prod
 
@@ -631,11 +635,11 @@ class _FragmentGroup:
             frag_idxs = [self.centre] + list(perm) + self.neighbours
             yield frag_idxs
 
-    def get_fragment(self, mol, perm=None) -> Atoms:
-        if perm is None:
-            perm = [self.centre] + list(self.hydrogens) + self.neighbours
+    def get_fragment(self, mol, h_perm=None) -> Atoms:
+        if h_perm is None:
+            h_perm = [self.centre] + list(self.hydrogens) + self.neighbours
 
-        frag = Atoms([mol.atoms[i] for i in perm])
+        frag = Atoms([mol.atoms[i] for i in h_perm])
         return frag
 
 
@@ -696,15 +700,15 @@ def align_h_groups_by_permutation(
                 )
                 continue
         best_rmsd, best_mapping = None, None
-        for perm in frag_group.permutate_hs():
-            frag1 = frag_group.get_fragment(first_species, perm)
+        for h_perm in frag_group.permutate_hs():
+            frag1 = frag_group.get_fragment(first_species, h_perm)
             frag2 = frag_group.get_fragment(second_species)
             rmsd = calc_rmsd(frag1.coordinates, frag2.coordinates)
             if best_rmsd is None or rmsd < best_rmsd:
                 best_rmsd = rmsd
-                best_mapping = dict(zip(frag_group.hydrogens, perm))
+                best_mapping = dict(zip(frag_group.hydrogens, h_perm))
 
-        full_mapping = {i for i in range(first_species.n_atoms)}
+        full_mapping = {i: i for i in range(first_species.n_atoms)}
         full_mapping.update(best_mapping)
         first_species.reorder_atoms(full_mapping)
 
