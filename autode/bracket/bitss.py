@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.optimize import minimize
 from typing import Optional, Union, TYPE_CHECKING
 from autode.bracket.imagepair import EuclideanImagePair
 from autode.bracket.base import BaseBracketMethod
@@ -269,6 +270,7 @@ class BITSS(BaseBracketMethod):
         final_species,
         *args,
         reduction_fac=0.4,
+        constraint_update_freq=20,
         alpha=10,
         beta=0.1,
         **kwargs,
@@ -279,6 +281,7 @@ class BITSS(BaseBracketMethod):
             initial_species, final_species, alpha=alpha, beta=beta
         )
         self._fac = abs(float(reduction_fac))
+        self._constr_upd = abs(int(constraint_update_freq))
         self._current_macroiters: int = 0
 
     @property
@@ -293,14 +296,26 @@ class BITSS(BaseBracketMethod):
     def _micro_iter(self) -> int:
         return self.imgpair.total_iters // 2
 
-    def update_target_distance(self):
-        self.imgpair.target_dist = self.imgpair.target_dist * (1 - self._fac)
-        return None
-
     def _initialise_run(self) -> None:
-        self.imgpair.update_both_img_engrad()
         self.imgpair.target_dist = self.imgpair.dist * (1 - self._fac)
 
     def _step(self) -> None:
+        def set_coords_and_get_engrad(coords):
+            self.imgpair.bitss_coords = CartesianCoordinates(coords)
+            self.imgpair.update_both_img_engrad()
+            if self._micro_iter % self._constr_upd == 0:
+                self.imgpair.update_constraints()
+            return self.imgpair.bitss_energy, self.imgpair.bitss_grad
 
-        pass
+        remaining_iters = self._maxiter - self.imgpair.total_iters
+
+        res = minimize(
+            fun=set_coords_and_get_engrad,
+            x0=self.imgpair.bitss_coords,
+            jac=True,
+            method="L-BFGS-B",
+            options={"maxfun": remaining_iters, "gtol": self._gtol},
+        )
+
+        if not res.converged:
+            raise RuntimeError("Failed to optimise in a BITSS step")
