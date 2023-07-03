@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Optional, Union, TYPE_CHECKING
 from autode.bracket.imagepair import EuclideanImagePair
+from autode.bracket.base import BaseBracketMethod
 from autode.opt.coordinates import CartesianCoordinates
 from autode.values import Energy, Distance
 from autode.utils import ProcessPool
@@ -251,3 +252,55 @@ class BinaryImagePair(EuclideanImagePair):
         )
         k_d_1 = np.sqrt(proj_left_g**2, proj_right_g**2)
         k_d_1 /= 2 * np.sqrt(2) * self._beta * self._target_dist
+
+        k_d_2 = e_b / (self._beta * self._target_dist) ** 2
+        self._k_dist = float(max(k_d_1, k_d_2))
+
+        logger.info(
+            f"Updated constraints: κ_e = {self._k_eng}, κ_d = {self._k_dist}"
+        )
+        return None
+
+
+class BITSS(BaseBracketMethod):
+    def __init__(
+        self,
+        initial_species,
+        final_species,
+        *args,
+        reduction_fac=0.4,
+        alpha=10,
+        beta=0.1,
+        **kwargs,
+    ):
+        super().__init__(initial_species, final_species, *args, **kwargs)
+
+        self.imgpair = BinaryImagePair(
+            initial_species, final_species, alpha=alpha, beta=beta
+        )
+        self._fac = abs(float(reduction_fac))
+        self._current_macroiters: int = 0
+
+    @property
+    def _macro_iter(self) -> int:
+        return self._current_macroiters
+
+    @_macro_iter.setter
+    def _macro_iter(self, value: int):
+        self._current_macroiters = int(value)
+
+    @property
+    def _micro_iter(self) -> int:
+        return self.imgpair.total_iters // 2
+
+    def update_target_distance(self):
+        self.imgpair.target_dist = self.imgpair.target_dist * (1 - self._fac)
+        return None
+
+    def _initialise_run(self) -> None:
+        self.imgpair.update_both_img_engrad()
+        self.imgpair.target_dist = self.imgpair.dist * (1 - self._fac)
+
+    def _step(self) -> None:
+
+        pass
