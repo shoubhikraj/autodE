@@ -63,6 +63,7 @@ class BinaryImagePair(EuclideanImagePair):
         self._k_eng: Optional[float] = None  # units = 1/Ha
         self._target_dist: Optional[Distance] = None
 
+    @property
     def ts_guess(self) -> Optional["Species"]:
         """
         For BITSS method, images can rise and fall in energy, so we take
@@ -130,7 +131,7 @@ class BinaryImagePair(EuclideanImagePair):
         """
         if not isinstance(value, CartesianCoordinates):
             raise TypeError
-        if not value.shape != (3 * 2 * self.n_atoms,):
+        if value.shape != (3 * 2 * self.n_atoms,):
             raise ValueError("Coordinates have wrong dimensions")
 
         self.left_coord = CartesianCoordinates(value[: 3 * self.n_atoms])
@@ -205,7 +206,7 @@ class BinaryImagePair(EuclideanImagePair):
         assert self.left_coord.e and self.right_coord.e
 
         logger.info("Running IDPP interpolation to estimate barrier")
-        n_images = int(image_density * self.dist)
+        n_images = max(int(image_density * self.dist) + 2, 3)
         neb = NEB.from_end_points(
             self._left_image, self._right_image, n_images
         )
@@ -247,11 +248,13 @@ class BinaryImagePair(EuclideanImagePair):
         # sqrt(|∇E1|**2) + sqrt(|∇E2|**2) / (2 * sqrt(2) * beta * d_i),
         # E_B / (beta * d_i**2)
         # )
-        proj_left_g = abs(np.dot(self.left_coord.g, self.dist_vec) / self.dist)
-        proj_right_g = abs(
-            np.dot(self.right_coord.g, self.dist_vec) / self.dist
+        proj_left_g = abs(
+            float(np.dot(self.left_coord.g, self.dist_vec) / self.dist)
         )
-        k_d_1 = np.sqrt(proj_left_g**2, proj_right_g**2)
+        proj_right_g = abs(
+            float(np.dot(self.right_coord.g, self.dist_vec) / self.dist)
+        )
+        k_d_1 = np.sqrt(proj_left_g**2 + proj_right_g**2)
         k_d_1 /= 2 * np.sqrt(2) * self._beta * self._target_dist
 
         k_d_2 = e_b / (self._beta * self._target_dist) ** 2
@@ -269,13 +272,16 @@ class BITSS(BaseBracketMethod):
         initial_species,
         final_species,
         *args,
+        dist_tol=Distance(1.0, "ang"),
         reduction_fac=0.4,
         constraint_update_freq=20,
         alpha=10,
         beta=0.1,
         **kwargs,
     ):
-        super().__init__(initial_species, final_species, *args, **kwargs)
+        super().__init__(
+            initial_species, final_species, *args, dist_tol=dist_tol, **kwargs
+        )
 
         self.imgpair = BinaryImagePair(
             initial_species, final_species, alpha=alpha, beta=beta
@@ -303,7 +309,7 @@ class BITSS(BaseBracketMethod):
         def set_coords_and_get_engrad(coords):
             self.imgpair.bitss_coords = CartesianCoordinates(coords)
             self.imgpair.update_both_img_engrad()
-            if self._micro_iter % self._constr_upd == 0:
+            if (self._micro_iter - 1) % self._constr_upd == 0:
                 self.imgpair.update_constraints()
             return self.imgpair.bitss_energy, self.imgpair.bitss_grad
 
@@ -311,11 +317,18 @@ class BITSS(BaseBracketMethod):
 
         res = minimize(
             fun=set_coords_and_get_engrad,
-            x0=self.imgpair.bitss_coords,
+            x0=np.array(self.imgpair.bitss_coords),
             jac=True,
             method="L-BFGS-B",
             options={"maxfun": remaining_iters, "gtol": self._gtol},
         )
 
-        if not res.converged:
+        if not res.success:
             raise RuntimeError("Failed to optimise in a BITSS step")
+
+        logger.info(
+            "BITSS micro-iterations converged after setting target distance"
+        )
+
+        self.imgpair.target_dist *= 1 - self._fac
+        self._macro_iter += 1
