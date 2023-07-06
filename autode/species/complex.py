@@ -675,7 +675,6 @@ def get_hydrogen_groups(
         centre_neighbours = list(first_species.graph.neighbors(centre))
         # collect all H's attached to centre
         all_hs = [x for x in centre_neighbours if x in h_idxs]
-        all_hs.append(idx)
         used_h_idxs.extend(all_hs)
         # get other heavy, non-active atoms
         non_hs = [x for x in centre_neighbours if x not in h_idxs]
