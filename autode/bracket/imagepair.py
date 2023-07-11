@@ -420,6 +420,7 @@ class EuclideanImagePair(BaseImagePair, ABC):
 
         # for storing results from CINEB
         self._cineb_coords: Optional[CartesianCoordinates] = None
+        self._cineb_iters: Optional[int] = None
 
     @property
     def dist_vec(self) -> np.ndarray:
@@ -523,6 +524,7 @@ class EuclideanImagePair(BaseImagePair, ABC):
         ci_coords.update_g_from_cart_g(peak.gradient)
 
         self._cineb_coords = ci_coords
+        self._cineb_iters = cineb.images[1].iteration
         return None
 
     @property
