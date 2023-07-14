@@ -72,12 +72,12 @@ class CartesianCoordinates(OptCoordinates):
         Raises:
             (ValueError): If the conversion cannot be performed
         """
-        logger.info(f"Transforming Cartesian coordinates to {value}")
 
         if value.lower() in ("cart", "cartesian", "cartesiancoordinates"):
             return self
 
         elif value.lower() in ("dic", "delocalised internal coordinates"):
+            logger.info(f"Transforming Cartesian coordinates to {value}")
             return DIC.from_cartesian(self)
 
         # ---------- Implement other internal transformations here -----------
