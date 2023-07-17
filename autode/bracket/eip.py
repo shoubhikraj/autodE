@@ -13,14 +13,13 @@ from autode.bracket.dhs import TruncatedTaylor
 from autode.neb import NEB
 from autode.bracket.imagepair import EuclideanImagePair
 from autode.opt.coordinates import CartesianCoordinates
-from autode.values import Distance, GradientRMS
+from autode.values import Distance, GradientRMS, PotentialEnergy
 from autode.utils import ProcessPool
 from autode.log import logger
 
 if TYPE_CHECKING:
     from autode.species.species import Species
     from autode.wrappers.methods import Method
-    from autode.values import PotentialEnergy
 
 
 def _calculate_energy_for_species(
@@ -169,7 +168,6 @@ class ElasticImagePair(EuclideanImagePair):
 
     @property
     def perpendicular_gradients(self):
-        # todo make perp grad into better property
         perp_gradients = []
         d_hat = self.dist_vec / np.linalg.norm(self.dist_vec)
         for coord in [self.left_coords, self.right_coords]:
@@ -260,6 +258,7 @@ class ElasticImagePair(EuclideanImagePair):
         path_energies = _parallel_calc_energies(
             path_points, self._method, self._n_cores
         )
+        logger.info(f"Fitting parametric spline on {len(path_points)} points")
         # NOTE: Here we are fitting a parametric spline, with the parameter
         # being the path length along rxn coordinate (approximated from initial
         # IDPP interpolation), and target being all coordinates *and* energy at
@@ -283,7 +282,7 @@ class ElasticImagePair(EuclideanImagePair):
         path_distances = [0.0] + list(path_distances) + [total_dist]
 
         spline = CubicSpline(
-            x=path_distances,  # todo 0 starting index and max() for ending point
+            x=path_distances,
             y=target_data,
             axis=0,
         )
@@ -356,7 +355,7 @@ class ElasticImagePair(EuclideanImagePair):
         return None
 
 
-class EIPMicroImagePair(EuclideanImagePair):
+class IEIPMicroImagePair(EuclideanImagePair):
     """
     Class to carry out the micro-iterations for the i-EIP
     method
@@ -370,6 +369,18 @@ class EIPMicroImagePair(EuclideanImagePair):
         micro_step_size: Union[Distance, float],
         target_dist: Union[Distance, float],
     ):
+        """
+        Initialise an image-pair for i-EIP micro-iterations
+
+        Args:
+            species (Species): The species object
+            left_coords (CartesianCoordinates): Coordinates of left image, must
+                                        have defined energy, gradient and hessian
+            right_coords (CartesianCoordinates): Coordinates of right image, must
+                                        have defined energy, gradient and hessian
+            micro_step_size (Distance|float): Step size for each micro-iteration
+            target_dist (Distance|float): Target distance for image-pair
+        """
         # dummy species are required for superclass init
         left_image, right_image = species.copy(), species.copy()
         left_image.coordinates = left_coords
@@ -540,17 +551,16 @@ class IEIP(BaseBracketMethod):
     """
 
     @property
-    def _method_name(self) -> str:
-        return "i-EIP"
-
-    @property
     def _exceeded_maximum_iteration(self) -> bool:
         """Whether it has exceeded the number of maximum micro-iterations"""
-        logger.error(
-            f"Reached the maximum number of micro-iterations "
-            f"*{self._maxiter}"
-        )
-        return self._macro_iter >= self._maxiter
+        if self._macro_iter >= self._maxiter:
+            logger.error(
+                f"Reached the maximum number of micro-iterations "
+                f"*{self._maxiter}"
+            )
+            return True
+        else:
+            return False
 
     def __init__(
         self,
@@ -641,12 +651,13 @@ class IEIP(BaseBracketMethod):
     @property
     def converged(self) -> bool:
         """Is the i-EIP method converged"""
+        # NOTE: Original publication recommends also checking overlap
+        # of image-pair mode with Hessian eigenvalue for convergence, but
+        # Hessian is expensive, so we use simpler check
         return self.imgpair.dist < self._dist_tol and all(
             rms_grad <= self._gtol
             for rms_grad in self.imgpair.perpendicular_gradients
         )
-        # todo figure out how gradient converged can
-        # be implemented?
 
     def _initialise_run(self) -> None:
         """
@@ -659,7 +670,7 @@ class IEIP(BaseBracketMethod):
         # todo make a new function ll hessian and remove hess method?
         self.imgpair.update_both_img_hessian_by_calc()
         self._target_dist = self.imgpair.dist
-        # todo check the RMS g formula
+        # todo paper does not say what rmsg should be at beginning
         self._target_rms_g = (
             min(max(self.imgpair.dist / self._dist_tol, 1), 2) * self._gtol
         )
@@ -675,7 +686,7 @@ class IEIP(BaseBracketMethod):
         # Turn off logging for micro-iterations
         logger.disabled = True
         assert self._target_dist is not None
-        micro_imgpair = EIPMicroImagePair(
+        micro_imgpair = IEIPMicroImagePair(
             species=self._species,
             left_coords=self.imgpair.left_coords,
             right_coords=self.imgpair.right_coords,
@@ -730,4 +741,10 @@ class IEIP(BaseBracketMethod):
             min(max(self.imgpair.dist / self._dist_tol, 1), 2) * self._gtol
         )
 
+        logger.info(
+            f"Updating target distance to {self._target_dist:.3f} Å"
+            f" and updating target RMS gradient to "
+            f"{self._target_rms_g} Ha/Å"
+        )
+        return None
         # todo what happens at the end when update gives same value
