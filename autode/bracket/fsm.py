@@ -76,16 +76,23 @@ def _optimise_get_coords(species, tau, method, n_cores, maxiter):
 
 
 def _parallel_optimise_tangent(
-    left_species, left_tau, right_species, right_tau, method, n_cores
+    species_list: tuple, tau_list: tuple, method, n_cores, maxiter: int
 ):
     # TODO: species list and tau list
+    # todo check these formula
     n_procs = 2 if n_cores > 2 else 1
+    n_cores_per_pp = max(int(n_cores // 2), 1)
     with ProcessPool(max_workers=n_procs) as pool:
         jobs = [
             pool.submit(
-                _optimise_get_coords,
+                _optimise_get_coords, mol, tau, method, n_cores, maxiter
             )
+            for mol, tau in zip(species_list, tau_list)
         ]
+        new_coords = [job.result() for job in jobs]
+
+    assert isinstance(new_coords, tuple) and len(new_coords) == 2
+    return new_coords
 
 
 class FSMPath(EuclideanImagePair):
@@ -93,10 +100,12 @@ class FSMPath(EuclideanImagePair):
         self,
         left_image: "Species",
         right_image: "Species",
+        step_size,
         maxiter_per_node: int,
     ):
         super().__init__(left_image=left_image, right_image=right_image)
 
+        self._step_size = step_size  # todo distance
         self._max_n = abs(int(maxiter_per_node))
         assert self._max_n > 0
 
@@ -116,3 +125,26 @@ class FSMPath(EuclideanImagePair):
         idpp = NEB.from_end_points(
             self._left_image, self._right_image, num=interp_density
         )
+        # TODO: remove rotation, translation?
+        left_dists = []
+        right_dists = []
+        for point in idpp.images:
+            coords = CartesianCoordinates(point.coordinates)
+            left_dists.append(np.linalg.norm(coords - self.left_coords))
+            right_dists.append(np.linalg.norm(coords - self.right_coords))
+
+        left_next_idx = np.argmin(np.array(left_dists) - self._step_size)
+        right_next_idx = np.argmin(np.array(right_dists) - self._step_size)
+        species_list = [
+            idpp.images[left_next_idx],
+            idpp.images[right_next_idx],
+        ]
+        tau_list = [
+            _get_tau_from_spline_at(idpp, idx)
+            for idx in (left_next_idx, right_next_idx)
+        ]
+        # todo rename species list tau list etc.
+
+
+def _get_tau_from_spline_at(images, idx):
+    pass
