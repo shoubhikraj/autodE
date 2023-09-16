@@ -7,7 +7,7 @@ References:
 [1] A. Behn et al., J. Chem. Phys., 2011, 135, 224108 (original)
 [2] S. Sharada et al., J. Chem. Theory Comput., 2012, 8, 5166-5174 (improved)
 """
-from typing import Any, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 import numpy as np
 
 from autode.neb import NEB
@@ -72,11 +72,11 @@ class TangentQNROptimiser(HybridTRMOptimiser):
 def _optimise_get_coords(species, tau, method, n_cores, maxiter):
     opt = TangentQNROptimiser(maxiter=maxiter, tangent=tau)
     opt.run(species, method, n_cores)
-    return CartesianCoordinates(species.coordinates)
+    return CartesianCoordinates(species.coordinates), opt.iteration
 
 
 def _parallel_optimise_tangent(
-    species_list: tuple, tau_list: tuple, method, n_cores, maxiter: int
+    new_nodes: tuple, taus: tuple, method, n_cores, maxiter: int
 ):
     # TODO: species list and tau list
     # todo check these formula
@@ -87,12 +87,14 @@ def _parallel_optimise_tangent(
             pool.submit(
                 _optimise_get_coords, mol, tau, method, n_cores, maxiter
             )
-            for mol, tau in zip(species_list, tau_list)
+            for mol, tau in zip(new_nodes, taus)
         ]
-        new_coords = [job.result() for job in jobs]
+        result = [job.result() for job in jobs]
 
-    assert isinstance(new_coords, tuple) and len(new_coords) == 2
-    return new_coords
+    assert len(result) == 2
+    new_coords = (result[0][0], result[1][0])
+    total_iters = result[0][1] + result[1][1]
+    return new_coords, total_iters
 
 
 class FSMPath(EuclideanImagePair):
@@ -108,6 +110,21 @@ class FSMPath(EuclideanImagePair):
         self._step_size = step_size  # todo distance
         self._max_n = abs(int(maxiter_per_node))
         assert self._max_n > 0
+
+    @property
+    def ts_guess(self) -> Optional["Species"]:
+        energies = [coords.e for coords in self._total_history]
+        assert all(en is not None for en in energies), "Energy value missing"
+        peak_idx = np.argmax(energies)
+        assert peak_idx != 0 and peak_idx != len(self._total_history)
+        tmp_spc = self._left_image.new_species(name="peak")
+        peak_coords = self._total_history[peak_idx]
+        tmp_spc.coordinates = peak_coords
+        return tmp_spc
+
+    @property
+    def has_jumped_over_barrier(self) -> bool:
+        return False
 
     def grow_string(self, step_size: float, use_idpp: bool = True):
         assert 0 < step_size < self.dist
@@ -148,3 +165,10 @@ class FSMPath(EuclideanImagePair):
 
 def _get_tau_from_spline_at(images, idx):
     pass
+
+
+class FSM(BaseBracketMethod):
+    def __init__(self, initial_species, final_species):
+        super().__init__(
+            initial_species=initial_species, final_species=final_species
+        )
