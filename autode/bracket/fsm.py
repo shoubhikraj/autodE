@@ -11,6 +11,7 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 
 from autode.neb import NEB
+from autode.utils import ProcessPool
 from autode.bracket.imagepair import EuclideanImagePair
 from autode.bracket.base import BaseBracketMethod
 from autode.opt.coordinates import CartesianCoordinates
@@ -24,9 +25,9 @@ class TangentQNROptimiser(HybridTRMOptimiser):
     def __init__(
         self,
         maxiter: int,
-        gtol,
-        etol,
         tangent: np.ndarray,
+        gtol=1e-3,
+        etol=1e-4,
         trust_radius: float = 0.1,
     ):
         super().__init__(
@@ -54,6 +55,7 @@ class TangentQNROptimiser(HybridTRMOptimiser):
         self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
         self._remove_tangent_from_hessian()
         # TODO: make the hessian positive definite (min eigval option)
+        # TODO: is RFO step enough
 
     def _remove_tangent_from_hessian(self) -> None:
         # Frank Jensen, Introduction to Computational Chemistry, 565
@@ -62,10 +64,28 @@ class TangentQNROptimiser(HybridTRMOptimiser):
         assert self._coords is not None
         assert self._coords.h is not None
         x_k = self._tau_hat.reshape(-1, 1)
-        q_k = np.matmul(x_k, x_k.T)
-        p_k = np.ones_like(q_k) - q_k
+        p_k = np.eye(x_k.flatten().shape[0]) - np.matmul(x_k, x_k.T)
         self._coords.h = np.linalg.multi_dot([p_k.T, self._coords.h, p_k])
         return None
+
+
+def _optimise_get_coords(species, tau, method, n_cores, maxiter):
+    opt = TangentQNROptimiser(maxiter=maxiter, tangent=tau)
+    opt.run(species, method, n_cores)
+    return CartesianCoordinates(species.coordinates)
+
+
+def _parallel_optimise_tangent(
+    left_species, left_tau, right_species, right_tau, method, n_cores
+):
+    # TODO: species list and tau list
+    n_procs = 2 if n_cores > 2 else 1
+    with ProcessPool(max_workers=n_procs) as pool:
+        jobs = [
+            pool.submit(
+                _optimise_get_coords,
+            )
+        ]
 
 
 class FSMPath(EuclideanImagePair):
