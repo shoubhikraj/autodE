@@ -7,38 +7,43 @@ References:
 [1] A. Behn et al., J. Chem. Phys., 2011, 135, 224108 (original)
 [2] S. Sharada et al., J. Chem. Theory Comput., 2012, 8, 5166-5174 (improved)
 """
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, Union, TYPE_CHECKING
 import numpy as np
 
+from autode.values import PotentialEnergy
 from autode.neb import NEB
 from autode.utils import ProcessPool
 from autode.bracket.imagepair import EuclideanImagePair
 from autode.bracket.base import BaseBracketMethod
 from autode.opt.coordinates import CartesianCoordinates
-from autode.opt.optimisers.trm import HybridTRMOptimiser
+from autode.opt.optimisers.rfo import RFOptimiser
+from autode.opt.optimisers.hessian_update import BFGSSR1Update
 
 if TYPE_CHECKING:
     from autode.species.species import Species
 
 
-class TangentQNROptimiser(HybridTRMOptimiser):
+class TangentQNROptimiser(RFOptimiser):
     def __init__(
         self,
         maxiter: int,
         tangent: np.ndarray,
+        energy_eps: Union[PotentialEnergy, float],
         gtol=1e-3,
         etol=1e-4,
-        trust_radius: float = 0.1,
+        max_step: float = 0.06,
+        line_search_sigma: float = 0.7,
     ):
         super().__init__(
-            init_trust=trust_radius,
-            update_trust=False,
-            damp=False,
+            init_alpha=max_step,
             maxiter=maxiter,
             gtol=gtol,
             etol=etol,
         )
         self._tau_hat = tangent / np.linalg.norm(tangent)
+        self._hessian_update_types = [BFGSSR1Update]
+        self._eps = PotentialEnergy(energy_eps).to("Ha")
+        self._sigma = abs(float(line_search_sigma))
 
     def _update_gradient_and_energy(self) -> None:
         super()._update_gradient_and_energy()
@@ -54,6 +59,7 @@ class TangentQNROptimiser(HybridTRMOptimiser):
         assert len(self._tau_hat) == len(self._coords)
         self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
         self._remove_tangent_from_hessian()
+        self._update_gradient_and_energy()
         # TODO: make the hessian positive definite (min eigval option)
         # TODO: is RFO step enough
 
@@ -67,6 +73,36 @@ class TangentQNROptimiser(HybridTRMOptimiser):
         p_k = np.eye(x_k.flatten().shape[0]) - np.matmul(x_k, x_k.T)
         self._coords.h = np.linalg.multi_dot([p_k.T, self._coords.h, p_k])
         return None
+
+    def _get_adjusted_step(self, delta_s):
+        s_hat = delta_s / np.linalg.norm(delta_s)
+        # Determine the scaling factor from eqn (8) in ref [2]
+        if self.iteration == 0:
+            guess_alpha = self.alpha  # not clear from paper!
+        else:
+            e_delta = float(max(self.last_energy_change, -self._eps))
+            guess_alpha = -2 * e_delta / np.dot(self._coords.g, s_hat)
+
+        def sigma_estimate(alpha):
+            return 1.0 - alpha / np.linalg.norm(
+                np.matmul(np.linalg.inv(self._coords.h), self._coords.g)
+            )
+
+        if sigma_estimate(guess_alpha) <= self._sigma:
+            return guess_alpha * s_hat
+        else:
+            for _ in range(50):
+                guess_alpha = guess_alpha * 0.95
+                if sigma_estimate(guess_alpha) <= self._sigma:
+                    return guess_alpha * s_hat
+
+            raise RuntimeError("Unable to find the correct step size")
+
+    def _take_step_within_trust_radius(
+        self, delta_s: np.ndarray, factor: float = 1.0
+    ) -> float:
+        delta_s = self._get_adjusted_step(delta_s)
+        return super()._take_step_within_trust_radius(delta_s, factor)
 
 
 def _optimise_get_coords(species, tau, method, n_cores, maxiter):
