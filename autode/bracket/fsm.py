@@ -17,7 +17,7 @@ from autode.bracket.imagepair import EuclideanImagePair
 from autode.bracket.base import BaseBracketMethod
 from autode.opt.coordinates import CartesianCoordinates
 from autode.opt.optimisers.rfo import RFOptimiser
-from autode.opt.optimisers.hessian_update import BFGSSR1Update
+from autode.opt.optimisers.hessian_update import BFGSSR1Update, BFGSPDUpdate
 
 if TYPE_CHECKING:
     from autode.species.species import Species
@@ -41,7 +41,8 @@ class TangentQNROptimiser(RFOptimiser):
             etol=etol,
         )
         self._tau_hat = tangent / np.linalg.norm(tangent)
-        self._hessian_update_types = [BFGSSR1Update]
+        # prefer BFGS as it is good for minimisation
+        self._hessian_update_types = [BFGSPDUpdate, BFGSSR1Update]
         self._eps = PotentialEnergy(energy_eps).to("Ha")
         self._sigma = abs(float(line_search_sigma))
 
@@ -117,11 +118,11 @@ def _parallel_optimise_tangent(
     # TODO: species list and tau list
     # todo check these formula
     n_procs = 2 if n_cores > 2 else 1
-    n_cores_per_pp = max(int(n_cores // 2), 1)
+    n_cores_pp = max(int(n_cores // 2), 1)
     with ProcessPool(max_workers=n_procs) as pool:
         jobs = [
             pool.submit(
-                _optimise_get_coords, mol, tau, method, n_cores, maxiter
+                _optimise_get_coords, mol, tau, method, n_cores_pp, maxiter
             )
             for mol, tau in zip(new_nodes, taus)
         ]
@@ -140,12 +141,14 @@ class FSMPath(EuclideanImagePair):
         right_image: "Species",
         step_size,
         maxiter_per_node: int,
+        use_idpp: bool = True,
     ):
         super().__init__(left_image=left_image, right_image=right_image)
 
         self._step_size = step_size  # todo distance
         self._max_n = abs(int(maxiter_per_node))
         assert self._max_n > 0
+        self._energy_eps = 0.0
 
     @property
     def ts_guess(self) -> Optional["Species"]:
@@ -162,17 +165,26 @@ class FSMPath(EuclideanImagePair):
     def has_jumped_over_barrier(self) -> bool:
         return False
 
-    def grow_string(self, step_size: float, use_idpp: bool = True):
-        assert 0 < step_size < self.dist
-        interp_density = max(int(self.dist / step_size), 1) * 10
+    def grow_string(self, use_idpp: bool = True):
+        assert 0 < self._step_size < self.dist
+        interp_density = max(int(self.dist / self._step_size), 1) * 10
 
         if not use_idpp:
-            step = self.dist_vec * (step_size / self.dist)
+            step = self.dist_vec * (self._step_size / self.dist)
             left_new = self.left_coords - step
             right_new = self.right_coords + step
             # Not clear what the tangents are for cartesian, so we
             # take the Cartesian direction, may be changed later
             left_tau = right_tau = self.dist_vec / self.dist
+            result = _parallel_optimise_tangent(
+                (left_new, right_new),
+                (left_tau, right_tau),
+                method=self._method,
+                n_cores=self._n_cores,
+                maxiter=self._max_n,
+            )
+            self._add_coordinates(result[0])
+            # return result[1]
             # TODO: optimise here and return
 
         idpp = NEB.from_end_points(
@@ -188,15 +200,29 @@ class FSMPath(EuclideanImagePair):
 
         left_next_idx = np.argmin(np.array(left_dists) - self._step_size)
         right_next_idx = np.argmin(np.array(right_dists) - self._step_size)
-        species_list = [
+        nodes = [
             idpp.images[left_next_idx],
             idpp.images[right_next_idx],
         ]
-        tau_list = [
+        tangents = [
             _get_tau_from_spline_at(idpp, idx)
             for idx in (left_next_idx, right_next_idx)
         ]
         # todo rename species list tau list etc.
+
+    def _add_coordinates(self, new_nodes: tuple):
+        # todo add new coords by removing translation and rotation
+        pass
+
+    def estimate_energy_epsilon(self):
+        assert self.left_coords.e and self.right_coords.e
+        delta_e = abs(self.left_coords.e - self.right_coords.e)
+        upper_lim = PotentialEnergy(2.5, "kcal/mol")
+        if delta_e < upper_lim:
+            self._energy_eps = float(delta_e.to("Ha"))
+        else:
+            self._energy_eps = float(upper_lim.to("Ha"))
+        return None
 
 
 def _get_tau_from_spline_at(images, idx):
@@ -204,7 +230,46 @@ def _get_tau_from_spline_at(images, idx):
 
 
 class FSM(BaseBracketMethod):
-    def __init__(self, initial_species, final_species):
+    def __init__(
+        self,
+        initial_species,
+        final_species,
+        step_size: float = 0.2,
+        maxiter_per_node: int = 6,
+        use_idpp: bool = False,
+        *args,
+        **kwargs,
+    ):
         super().__init__(
             initial_species=initial_species, final_species=final_species
         )
+        self.imgpair: FSMPath = FSMPath(
+            left_image=initial_species,
+            right_image=final_species,
+            maxiter_per_node=maxiter_per_node,
+            step_size=step_size,
+            use_idpp=use_idpp,
+        )
+        self._current_microiters = 0
+
+    @property
+    def _macro_iter(self) -> int:
+        return int(self.imgpair.total_iters / 2)
+
+    @property
+    def _micro_iter(self) -> int:
+        return self._current_microiters
+
+    @_micro_iter.setter
+    def _micro_iter(self, value: int):
+        self._current_microiters = value
+
+    def _initialise_run(self) -> None:
+        self.imgpair.update_both_img_engrad()
+        self.imgpair.estimate_energy_epsilon()
+
+    def _step(self) -> None:
+        iters = self.imgpair.grow_string()
+        self._micro_iter += iters
+
+        pass
