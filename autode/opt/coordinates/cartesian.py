@@ -151,10 +151,10 @@ class CartTRCoordinates(CartesianCoordinates):
         # get overlap matrix, and check if it is singular
         s = np.matmul(b.T, b)
         if np.linalg.matrix_rank(s) < 6:
-            # todo change this to handle linear cases
-            raise Exception("Matrix singular!!")
-        s_inv = np.linalg.inv(s)
-        r = np.linalg.multi_dot([b, s_inv, b.T])
+            r = _stabilised_gram_schmidt_orthonormalise(s)
+        else:
+            s_inv = np.linalg.inv(s)
+            r = np.linalg.multi_dot([b, s_inv, b.T])
         assert r.shape[0] == r.shape[1]
         return np.eye(r.shape[0]) - r
 
@@ -193,7 +193,7 @@ class CartTRCoordinates(CartesianCoordinates):
         self.h = np.multi_dot([p, arr, p.T])
 
 
-def _stabilised_gram_schmidt_orthonormalise(matrix):
+def _stabilised_gram_schmidt_orthonormalise(matrix) -> np.ndarray:
     """
     Orthogonalise a set of vectors that are the columns of
     the matrix provided, and return a matrix of the same
@@ -214,11 +214,21 @@ def _stabilised_gram_schmidt_orthonormalise(matrix):
         """is this a zero vector"""
         return np.allclose(v, np.zeros_like(v))
 
+    # todo check this formula
     vecs = [np.array(matrix[:, i]).flatten() for i in range(matrix.shape[1])]
     assert not any(is_zero_vec(v) for v in vecs)
 
     for i in range(1, len(vecs)):
         try:
-            pass
+            for c in range(i, len(vecs)):
+                vecs[c] = vecs[c] - proj_u_v(vecs[i - 1], vecs[c])
         except IndexError:
             pass
+    # normalise
+    vecs = [vec / np.linalg.norm(vec) for vec in vecs]
+
+    orth_mat = np.zeros(shape=(matrix.shape[0], len(vecs)))
+    for i, vec in enumerate(vecs):
+        orth_mat[:, i] = vec
+
+    return orth_mat
