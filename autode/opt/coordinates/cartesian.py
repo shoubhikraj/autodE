@@ -151,7 +151,7 @@ class CartTRCoordinates(CartesianCoordinates):
         # get overlap matrix, and check if it is singular
         s = np.matmul(b.T, b)
         if np.linalg.matrix_rank(s) < 6:
-            r = _stabilised_gram_schmidt_orthonormalise(s)
+            r = _stabilised_gram_schmidt_orthonormalise(b)
         else:
             s_inv = np.linalg.inv(s)
             r = np.linalg.multi_dot([b, s_inv, b.T])
@@ -190,7 +190,7 @@ class CartTRCoordinates(CartesianCoordinates):
 
         p = self._calculate_projector()
         # todo check formula with frank jensen
-        self.h = np.multi_dot([p, arr, p.T])
+        self.h = np.linalg.multi_dot([p, arr, p.T])
 
 
 def _stabilised_gram_schmidt_orthonormalise(matrix) -> np.ndarray:
