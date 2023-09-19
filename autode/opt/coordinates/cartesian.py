@@ -210,20 +210,28 @@ def _stabilised_gram_schmidt_orthonormalise(matrix) -> np.ndarray:
         """projection of v on u"""
         return u * np.dot(u, v) / np.dot(u, u)
 
-    def is_zero_vec(v):
-        """is this a zero vector"""
-        return np.allclose(v, np.zeros_like(v))
+    def remove_zero_vecs(vec_list: list):
+        """remove any zero vectors recursively"""
+        for idx, v in enumerate(vec_list):
+            if np.allclose(v, np.zeros_like(v)):
+                vec_list.pop(idx)
+                return remove_zero_vecs(vec_list)
+        return vec_list
 
     # todo check this formula
+    # cast it as list, and remove any zeros already there
     vecs = [np.array(matrix[:, i]).flatten() for i in range(matrix.shape[1])]
-    assert not any(is_zero_vec(v) for v in vecs)
+    remove_zero_vecs(vecs)
 
     for i in range(1, len(vecs)):
         try:
+            # orthogonalise iteratively
             for c in range(i, len(vecs)):
                 vecs[c] = vecs[c] - proj_u_v(vecs[i - 1], vecs[c])
+            remove_zero_vecs(vecs)
+        # as we are removing items, the index may go out of range
         except IndexError:
-            pass
+            break
     # normalise
     vecs = [vec / np.linalg.norm(vec) for vec in vecs]
 
