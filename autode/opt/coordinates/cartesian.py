@@ -107,7 +107,7 @@ class CartTRCoordinates(CartesianCoordinates):
     Reference: Page, McIver, J. Chem. Phys., 1988, 88(2), 922
     """
 
-    def _get_tr_vectors(self) -> np.ndarray:
+    def _get_tr_vecs(self) -> np.ndarray:
         """
         Obtain translation and rotation vectors which may or may not
         be orthogonal, and may contain linear dependencies.
@@ -147,7 +147,7 @@ class CartTRCoordinates(CartesianCoordinates):
         Returns:
             (np.ndarray): The projector matrix
         """
-        b = self._get_tr_vectors()
+        b = self._get_tr_vecs()
 
         # get orthogonal basis from SVD, removes one mode if linear
         v = scipy.linalg.orth(b, rcond=1.0e-4)
@@ -186,4 +186,4 @@ class CartTRCoordinates(CartesianCoordinates):
             return None
 
         p = self._calculate_projector()
-        self.h = np.linalg.multi_dot([p, arr, p.T])
+        self.h = np.linalg.multi_dot([p.T, arr, p])
