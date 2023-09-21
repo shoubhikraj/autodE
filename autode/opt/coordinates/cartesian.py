@@ -1,4 +1,5 @@
 import numpy as np
+import scipy
 from typing import Optional, TYPE_CHECKING
 
 from autode.log import logger
@@ -148,13 +149,10 @@ class CartTRCoordinates(CartesianCoordinates):
         """
         b = self._get_tr_vectors()
 
-        # get overlap matrix, and check if it is singular
-        s = np.matmul(b.T, b)
-        if np.linalg.matrix_rank(s) < 6:
-            r = _stabilised_gram_schmidt_orthonormalise(b)
-        else:
-            s_inv = np.linalg.inv(s)
-            r = np.linalg.multi_dot([b, s_inv, b.T])
+        # get orthogonal basis from SVD, removes one mode if linear
+        v = scipy.linalg.orth(b, rcond=1.0e-4)
+        r = np.matmul(v, v.T)
+
         assert r.shape[0] == r.shape[1]
         return np.eye(r.shape[0]) - r
 
@@ -171,7 +169,6 @@ class CartTRCoordinates(CartesianCoordinates):
             return None
 
         p = self._calculate_projector()
-        # todo check formula frank jensen
         self.g = np.matmul(p, arr)
 
     def _update_h_from_cart_h(self, arr: Optional["Hessian"]) -> None:
@@ -189,54 +186,4 @@ class CartTRCoordinates(CartesianCoordinates):
             return None
 
         p = self._calculate_projector()
-        # todo check formula with frank jensen
         self.h = np.linalg.multi_dot([p, arr, p.T])
-
-
-def _stabilised_gram_schmidt_orthonormalise(matrix) -> np.ndarray:
-    """
-    Orthogonalise a set of vectors that are the columns of
-    the matrix provided, and return a matrix of the same
-    shape with orthonormal columns
-
-    Args:
-        matrix:
-
-    Returns:
-        (np.ndarray):
-    """
-
-    def proj_u_v(u, v):
-        """projection of v on u"""
-        return u * np.dot(u, v) / np.dot(u, u)
-
-    def remove_zero_vecs(vec_list: list):
-        """remove any zero vectors recursively"""
-        for idx, v in enumerate(vec_list):
-            if np.allclose(v, np.zeros_like(v)):
-                vec_list.pop(idx)
-                return remove_zero_vecs(vec_list)
-        return vec_list
-
-    # todo check this formula
-    # cast it as list, and remove any zeros already there
-    vecs = [np.array(matrix[:, i]).flatten() for i in range(matrix.shape[1])]
-    remove_zero_vecs(vecs)
-
-    for i in range(1, len(vecs)):
-        try:
-            # orthogonalise iteratively
-            for c in range(i, len(vecs)):
-                vecs[c] = vecs[c] - proj_u_v(vecs[i - 1], vecs[c])
-            remove_zero_vecs(vecs)
-        # as we are removing items, the index may go out of range
-        except IndexError:
-            break
-    # normalise
-    vecs = [vec / np.linalg.norm(vec) for vec in vecs]
-
-    orth_mat = np.zeros(shape=(matrix.shape[0], len(vecs)))
-    for i, vec in enumerate(vecs):
-        orth_mat[:, i] = vec
-
-    return orth_mat
