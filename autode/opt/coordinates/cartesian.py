@@ -168,8 +168,10 @@ class CartTRCoordinates(CartesianCoordinates):
             self.g = None
             return None
 
+        # cast into column form
+        arr = arr.flatten().reshape(-1, 1)
         p = self._calculate_projector()
-        self.g = np.matmul(p, arr)
+        self.g = np.matmul(p, arr).flatten()
 
     def _update_h_from_cart_h(self, arr: Optional["Hessian"]) -> None:
         """
