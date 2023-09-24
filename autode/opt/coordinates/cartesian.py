@@ -20,13 +20,20 @@ class CartesianCoordinates(OptCoordinates):
 
     def __new__(cls, input_array, units="Å") -> "CartesianCoordinates":
         """New instance of these coordinates"""
-        return super().__new__(
+        arr = super().__new__(
             cls, np.array(input_array).flatten(), units=units
         )
 
+        arr.remove_tr = False  # whether to remove trans. and rot. dof
+        return arr
+
     def __array_finalize__(self, obj) -> None:
         """See https://numpy.org/doc/stable/user/basics.subclassing.html"""
-        return None if obj is None else super().__array_finalize__(obj)
+        super().__array_finalize__(obj)
+
+        for attr in ["remove_tr"]:
+            setattr(self, attr, getattr(obj, attr, None))
+        return
 
     def _str_is_valid_unit(self, string) -> bool:
         """Is a string a valid unit for these coordinates e.g. nm"""
@@ -34,26 +41,45 @@ class CartesianCoordinates(OptCoordinates):
 
     def _update_g_from_cart_g(self, arr: Optional["Gradient"]) -> None:
         """
-        Updates the gradient from a calculated Cartesian gradient, which for
-        Cartesian coordinates there is nothing to be done for.
+        Updates the gradient from a calculated Cartesian gradient, optionally
+        removing the rotation and translational components
 
         -----------------------------------------------------------------------
         Arguments:
             arr: Gradient array
         """
-        self.g = None if arr is None else np.array(arr).flatten()
+        if arr is None:
+            self.g = None
+            return
+
+        arr = np.array(arr).flatten()
+
+        if self.remove_tr:
+            arr = arr.reshape(-1, 1)  # type: ignore
+            p = self._calculate_projector()
+            self.g = np.matmul(p, arr).flatten()
+        else:
+            self.g = arr
 
     def _update_h_from_cart_h(self, arr: Optional["Hessian"]) -> None:
         """
         Update the Hessian from a Cartesian Hessian matrix with shape
-        3N x 3N for a species with N atoms.
-
+        3N x 3N for a species with N atoms. Optionally project out the
+        rotational and vibrational degrees of freedom
 
         -----------------------------------------------------------------------
         Arguments:
             arr: Hessian matrix
         """
-        self.h = None if arr is None else np.array(arr)
+        if arr is None:
+            self.h = None
+            return
+
+        if self.remove_tr:
+            p = self._calculate_projector()
+            self.h = np.linalg.multi_dot([p.T, arr, p])
+        else:
+            self.h = np.array(arr)
 
     def iadd(self, value: np.ndarray) -> OptCoordinates:
         return np.ndarray.__iadd__(self, value)
@@ -92,28 +118,13 @@ class CartesianCoordinates(OptCoordinates):
                 f"Cannot convert Cartesian coordinates to {value}"
             )
 
-    @property
-    def expected_number_of_dof(self) -> int:
-        """Expected number of degrees of freedom for the system"""
-        n_atoms = len(self.flatten()) // 3
-        return 3 * n_atoms - 6
-
-
-class CartTRCoordinates(CartesianCoordinates):
-    """
-    Cartesian coordinates with translation and rotation removed from
-    the gradient and hessian.
-
-    Reference: Page, McIver, J. Chem. Phys., 1988, 88(2), 922
-    """
-
     def _get_tr_vecs(self) -> np.ndarray:
         """
-        Obtain translation and rotation vectors which may or may not
-        be orthogonal, and may contain linear dependencies.
+        Obtain translation and rotation vectors and then orthonormalise
+        them, removing linear dependencies for linear molecules
 
         Returns:
-            (np.ndarray): The translation rotation vectors
+            (np.ndarray): The orthonormal trans. and rot. vectors
         """
         assert len(self) != 0 and len(self.shape) == 1
         assert len(self) % 3 == 0
@@ -137,7 +148,10 @@ class CartTRCoordinates(CartesianCoordinates):
         for i, arr in enumerate([b_1, b_2, b_3, b_4, b_5, b_6]):
             b[:, i] = arr
 
-        return b
+        # get orthonormal basis from SVD, removes one mode if linear
+        v = scipy.linalg.orth(b, rcond=1.0e-5)
+        assert v.shape[1] in (5, 6)
+        return v
 
     def _calculate_projector(self):
         """
@@ -147,45 +161,16 @@ class CartTRCoordinates(CartesianCoordinates):
         Returns:
             (np.ndarray): The projector matrix
         """
-        b = self._get_tr_vecs()
-
-        # get orthogonal basis from SVD, removes one mode if linear
-        v = scipy.linalg.orth(b, rcond=1.0e-4)
+        v = self._get_tr_vecs()
         r = np.matmul(v, v.T)
 
         assert r.shape[0] == r.shape[1]
         return np.eye(r.shape[0]) - r
 
-    def _update_g_from_cart_g(self, arr: Optional["Gradient"]) -> None:
-        """
-        Updates the gradient from Cartesian gradient, removing the components
-        along rotational or translational modes
-
-        Args:
-            arr: Gradient array
-        """
-        if arr is None:
-            self.g = None
-            return None
-
-        # cast into column form
-        arr = arr.flatten().reshape(-1, 1)
-        p = self._calculate_projector()
-        self.g = np.matmul(p, arr).flatten()
-
-    def _update_h_from_cart_h(self, arr: Optional["Hessian"]) -> None:
-        """
-        Updates the hessian from Cartesian Hessian, removing the components
-        along rotational and translational modes
-
-        Args:
-            arr: Hessian array
-        """
-        # NOTE: Unless at a minima, rot. modes cannot be formally
-        # projected out as there is some coupling to vib. modes
-        if arr is None:
-            self.h = None
-            return None
-
-        p = self._calculate_projector()
-        self.h = np.linalg.multi_dot([p.T, arr, p])
+    @property
+    def expected_number_of_dof(self) -> int:
+        """Expected number of degrees of freedom for the system"""
+        # todo check this
+        n_tr = self._get_tr_vecs().shape[1]
+        n_atoms = len(self.flatten()) // 3
+        return 3 * n_atoms - n_tr
