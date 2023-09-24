@@ -13,6 +13,7 @@ import numpy as np
 from autode.values import PotentialEnergy
 from autode.neb import NEB
 from autode.utils import ProcessPool
+from autode.path.interpolation import CubicPathSpline
 from autode.bracket.imagepair import EuclideanImagePair
 from autode.bracket.base import BaseBracketMethod
 from autode.opt.coordinates import CartesianCoordinates
@@ -190,6 +191,7 @@ class FSMPath(EuclideanImagePair):
         idpp = NEB.from_end_points(
             self._left_image, self._right_image, num=interp_density
         )
+        spline = CubicPathSpline.from_species_list(idpp.images)
         # TODO: remove rotation, translation?
         left_dists = []
         right_dists = []
@@ -205,10 +207,14 @@ class FSMPath(EuclideanImagePair):
             idpp.images[right_next_idx],
         ]
         tangents = [
-            _get_tau_from_spline_at(idpp, idx)
+            spline.tangent_at(spline.path_distances[idx])
             for idx in (left_next_idx, right_next_idx)
         ]
         # todo rename species list tau list etc.
+
+    def _get_idpp_coords_tangents(self):
+        """get the idpp new coords and tangent"""
+        pass
 
     def _add_coordinates(self, new_nodes: tuple):
         # todo add new coords by removing translation and rotation
@@ -226,7 +232,8 @@ class FSMPath(EuclideanImagePair):
 
 
 def _get_tau_from_spline_at(images, idx):
-    pass
+
+    return spline.tangent_at(spline.path_distances[idx])
 
 
 class FSM(BaseBracketMethod):

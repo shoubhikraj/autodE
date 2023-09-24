@@ -74,7 +74,8 @@ class CubicPathSpline:
         to normalised Euclidean distances (chord-length parameterisation)
 
         Returns:
-            (list[float]):
+            (list[float]): A list of positions
+
         """
         assert self._path_spline is not None
         return list(self._path_spline.x)
@@ -106,6 +107,10 @@ class CubicPathSpline:
                 "Must have fitted energies before calling energy_at()"
             )
         return self._energy_spline(path_distance)
+
+    def tangent_at(self, path_distance: float) -> np.ndarray:
+        """Spline-predicted tangent at a point"""
+        return self._path_spline.derivative()(path_distance)
 
     @classmethod
     def from_species_list(
