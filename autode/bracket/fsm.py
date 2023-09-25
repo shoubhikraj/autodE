@@ -41,6 +41,7 @@ class TangentQNROptimiser(RFOptimiser):
             gtol=gtol,
             etol=etol,
         )
+        # todo remove translation rotation before generating tangent
         self._tau_hat = tangent / np.linalg.norm(tangent)
         # prefer BFGS as it is good for minimisation
         self._hessian_update_types = [BFGSPDUpdate, BFGSSR1Update]
@@ -254,11 +255,6 @@ class FSMPath(EuclideanImagePair):
         else:
             self._energy_eps = float(upper_lim.to("Ha"))
         return None
-
-
-def _get_tau_from_spline_at(images, idx):
-
-    return spline.tangent_at(spline.path_distances[idx])
 
 
 class FSM(BaseBracketMethod):
