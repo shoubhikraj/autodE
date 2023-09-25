@@ -7,7 +7,7 @@ References:
 [1] A. Behn et al., J. Chem. Phys., 2011, 135, 224108 (original)
 [2] S. Sharada et al., J. Chem. Theory Comput., 2012, 8, 5166-5174 (improved)
 """
-from typing import Any, Optional, Union, TYPE_CHECKING
+from typing import Any, Tuple, Optional, Union, TYPE_CHECKING
 import numpy as np
 
 from autode.values import PotentialEnergy
@@ -161,6 +161,25 @@ def _parallel_optimise_tangent(
     return new_coords, total_iters
 
 
+def _align_coords_to_ref(
+    align_coords: CartesianCoordinates, ref_coords: CartesianCoordinates
+):
+    from autode.geom import get_rot_mat_kabsch
+
+    p_mat = align_coords.reshape(-1, 3)
+    q_mat = ref_coords.reshape(-1, 3)
+
+    q_mat_centroid = np.average(q_mat, axis=0)
+    # translate to origin, then to ref's centroid
+    p_mat -= np.average(p_mat, axis=0)
+    p_mat += q_mat_centroid
+
+    rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
+    rotated_p_mat = np.dot(rot_mat, p_mat.T).T
+
+    align_coords[:] = rotated_p_mat.flatten()
+
+
 class FSMPath(EuclideanImagePair):
     def __init__(
         self,
@@ -238,9 +257,61 @@ class FSMPath(EuclideanImagePair):
         ]
         # todo rename species list tau list etc.
 
-    def _get_idpp_coords_tangents(self):
-        """get the idpp new coords and tangent"""
-        pass
+    def _get_new_coords_tangents_cartesian(self) -> Tuple[tuple, tuple]:
+        """
+        Obtain the next set of new node coordinates and tangent,
+        using linear Cartesian interpolation
+
+        Returns:
+            (tuple):
+        """
+        step = self.dist_vec * (self._step_size / self.dist)
+        left_new = self.left_coords - step
+        right_new = self.right_coords + step
+        _align_coords_to_ref(left_new, self.left_coords)
+        _align_coords_to_ref(right_new, self.right_coords)
+        # NOTE: It is not clear from the paper what the tangents are
+        # for cartesian, so we simply take the Cartesian direction
+        left_tau = left_new - self.left_coords
+        right_tau = right_new - self.right_coords
+        return (left_new, right_new), (left_tau, right_tau)
+
+    def _get_new_coords_tangents_idpp(self) -> Tuple[tuple, tuple]:
+        """
+        Obtain the next set of new node coordinates and tangent,
+        using IDPP interpolation. Cubic spline is used for tangents
+
+        Returns:
+            (tuple):
+        """
+        # take a high density interpolation and choose closest to step size
+        interp_density = max(int(self.dist / self._step_size), 1) * 10
+        idpp = NEB.from_end_points(
+            self._left_image, self._right_image, num=interp_density
+        )
+        assert len(idpp.images) > 2
+        coords_list: list = []
+        for point in idpp.images:
+            coords = CartesianCoordinates(point.coordinates)
+            if len(coords_list) > 0:
+                _align_coords_to_ref(coords, coords_list[-1])
+            coords_list.append(coords)
+        assert np.all((coords_list[-1] - self.right_coords) < 1.0e-10)
+        left_dists, right_dists = [], []
+        for coords in coords_list:
+            left_dists.append(np.linalg.norm(self.left_coords - coords))
+            right_dists.append(np.linalg.norm(self.right_coords - coords))
+        left_idx = np.argmin(np.array(left_dists) - self._step_size)
+        right_idx = np.argmin(np.array(right_dists) - self._step_size)
+        assert np.isclose(left_dists[left_idx], self._step_size, rtol=5e-2)
+        assert np.isclose(right_dists[right_idx], self._step_size, rtol=5e-2)
+        nodes = (coords_list[left_idx], coords_list[right_idx])
+        spline = CubicPathSpline(coords_list)
+        tangents = tuple(
+            spline.tangent_at(spline.path_distances[idx])
+            for idx in [left_idx, right_idx]
+        )
+        return nodes, tangents
 
     def _add_coordinates(self, new_nodes: tuple):
         # todo add new coords by removing translation and rotation
