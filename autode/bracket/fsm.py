@@ -48,6 +48,10 @@ class TangentQNROptimiser(RFOptimiser):
         self._sigma = abs(float(line_search_sigma))
 
     def _update_gradient_and_energy(self) -> None:
+        """
+        Update the gradient and energy, removing the component along
+        the tangent vector
+        """
         super()._update_gradient_and_energy()
         assert self._coords is not None
         g_parall = np.dot(self._tau_hat, self._coords.g) * self._tau_hat
@@ -58,6 +62,7 @@ class TangentQNROptimiser(RFOptimiser):
         self._coords = CartesianCoordinates(
             self._species.coordinates.to("ang")
         )
+        self._coords.remove_tr = True
         assert len(self._tau_hat) == len(self._coords)
         self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
         self._remove_tangent_from_hessian()
@@ -75,6 +80,32 @@ class TangentQNROptimiser(RFOptimiser):
         p_k = np.eye(x_k.flatten().shape[0]) - np.matmul(x_k, x_k.T)
         self._coords.h = np.linalg.multi_dot([p_k.T, self._coords.h, p_k])
         return None
+
+    def _step(self):
+        """RFO step, ignoring the zeroed TR modes"""
+        self._coords.h = self._updated_h()
+        h_n, _ = self._coords.h.shape
+        aug_H = np.zeros(shape=(h_n + 1, h_n + 1))
+
+        aug_H[:h_n, :h_n] = self._coords.h
+        aug_H[-1, :h_n] = self._coords.g
+        aug_H[:h_n, -1] = self._coords.g
+
+        aug_H_lmda = np.linalg.eigvalsh(aug_H)
+        mode = np.where(np.abs(aug_H_lmda) > 1.0e-14)[0][0]
+        shift_lmda = aug_H_lmda[mode]
+
+        b, u = np.linalg.eigh(self._coords.h)
+        f = u.T.dot(self._coords.g)
+        delta_s = np.zeros_like(self._coords)
+
+        for i in range(h_n):
+            if b <= 1.0e-14:
+                continue
+                # todo check below formula
+            delta_s -= f[i] * u[:, i] / (b[i] - shift_lmda)
+
+        self._take_step_within_trust_radius(delta_s)
 
     def _get_adjusted_step(self, delta_s):
         s_hat = delta_s / np.linalg.norm(delta_s)
@@ -99,12 +130,6 @@ class TangentQNROptimiser(RFOptimiser):
                     return guess_alpha * s_hat
 
             raise RuntimeError("Unable to find the correct step size")
-
-    def _take_step_within_trust_radius(
-        self, delta_s: np.ndarray, factor: float = 1.0
-    ) -> float:
-        delta_s = self._get_adjusted_step(delta_s)
-        return super()._take_step_within_trust_radius(delta_s, factor)
 
 
 def _optimise_get_coords(species, tau, method, n_cores, maxiter):
