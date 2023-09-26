@@ -7,7 +7,7 @@ References:
 [1] A. Behn et al., J. Chem. Phys., 2011, 135, 224108 (original)
 [2] S. Sharada et al., J. Chem. Theory Comput., 2012, 8, 5166-5174 (improved)
 """
-from typing import Any, Tuple, Optional, Union, TYPE_CHECKING
+from typing import Any, List, Tuple, Optional, Union, TYPE_CHECKING
 import numpy as np
 
 from autode.values import PotentialEnergy
@@ -140,10 +140,11 @@ def _optimise_get_coords(species, tau, method, n_cores, maxiter):
 
 
 def _parallel_optimise_tangent(
-    new_nodes: tuple, taus: tuple, method, n_cores, maxiter: int
+    new_nodes: tuple, species, taus: tuple, method, n_cores, maxiter: int
 ):
     # TODO: species list and tau list
     # todo check these formula
+
     n_procs = 2 if n_cores > 2 else 1
     n_cores_pp = max(int(n_cores // 2), 1)
     with ProcessPool(max_workers=n_procs) as pool:
@@ -195,6 +196,7 @@ class FSMPath(EuclideanImagePair):
         self._max_n = abs(int(maxiter_per_node))
         assert self._max_n > 0
         self._energy_eps = 0.0
+        self._use_idpp = bool(use_idpp)
 
     @property
     def ts_guess(self) -> Optional["Species"]:
@@ -211,53 +213,31 @@ class FSMPath(EuclideanImagePair):
     def has_jumped_over_barrier(self) -> bool:
         return False
 
-    def grow_string(self, use_idpp: bool = True):
-        assert 0 < self._step_size < self.dist
-        interp_density = max(int(self.dist / self._step_size), 1) * 10
+    def grow_string(self):
 
-        if not use_idpp:
-            step = self.dist_vec * (self._step_size / self.dist)
-            left_new = self.left_coords - step
-            right_new = self.right_coords + step
-            # Not clear what the tangents are for cartesian, so we
-            # take the Cartesian direction, may be changed later
-            left_tau = right_tau = self.dist_vec / self.dist
-            result = _parallel_optimise_tangent(
-                (left_new, right_new),
-                (left_tau, right_tau),
-                method=self._method,
-                n_cores=self._n_cores,
-                maxiter=self._max_n,
-            )
-            self._add_coordinates(result[0])
-            # return result[1]
-            # TODO: optimise here and return
+        if self._use_idpp:
+            nodes, tangents = self._get_new_coords_tangents_idpp()
+        else:
+            nodes, tangents = self._get_new_coords_tangents_cartesian()
 
-        idpp = NEB.from_end_points(
-            self._left_image, self._right_image, num=interp_density
+        result = _parallel_optimise_tangent(
+            nodes,
+            self._left_image.copy(),
+            tangents,
+            self._method,
+            self._n_cores,
+            self._max_n,
         )
-        spline = CubicPathSpline.from_species_list(idpp.images)
-        # TODO: remove rotation, translation?
-        left_dists = []
-        right_dists = []
-        for point in idpp.images:
-            coords = CartesianCoordinates(point.coordinates)
-            left_dists.append(np.linalg.norm(coords - self.left_coords))
-            right_dists.append(np.linalg.norm(coords - self.right_coords))
 
-        left_next_idx = np.argmin(np.array(left_dists) - self._step_size)
-        right_next_idx = np.argmin(np.array(right_dists) - self._step_size)
-        nodes = [
-            idpp.images[left_next_idx],
-            idpp.images[right_next_idx],
-        ]
-        tangents = [
-            spline.tangent_at(spline.path_distances[idx])
-            for idx in (left_next_idx, right_next_idx)
-        ]
-        # todo rename species list tau list etc.
+        self._add_coordinates(result[0])
+        return result[1]
 
-    def _get_new_coords_tangents_cartesian(self) -> Tuple[tuple, tuple]:
+    def _get_new_coords_tangents_cartesian(
+        self,
+    ) -> Tuple[
+        Tuple[CartesianCoordinates, CartesianCoordinates],
+        Tuple[np.ndarray, np.ndarray],
+    ]:
         """
         Obtain the next set of new node coordinates and tangent,
         using linear Cartesian interpolation
@@ -276,7 +256,12 @@ class FSMPath(EuclideanImagePair):
         right_tau = right_new - self.right_coords
         return (left_new, right_new), (left_tau, right_tau)
 
-    def _get_new_coords_tangents_idpp(self) -> Tuple[tuple, tuple]:
+    def _get_new_coords_tangents_idpp(
+        self,
+    ) -> Tuple[
+        Tuple[CartesianCoordinates, CartesianCoordinates],
+        Tuple[np.ndarray, np.ndarray],
+    ]:
         """
         Obtain the next set of new node coordinates and tangent,
         using IDPP interpolation. Cubic spline is used for tangents
@@ -290,7 +275,7 @@ class FSMPath(EuclideanImagePair):
             self._left_image, self._right_image, num=interp_density
         )
         assert len(idpp.images) > 2
-        coords_list: list = []
+        coords_list: List[CartesianCoordinates] = []
         for point in idpp.images:
             coords = CartesianCoordinates(point.coordinates)
             if len(coords_list) > 0:
@@ -307,9 +292,9 @@ class FSMPath(EuclideanImagePair):
         assert np.isclose(right_dists[right_idx], self._step_size, rtol=5e-2)
         nodes = (coords_list[left_idx], coords_list[right_idx])
         spline = CubicPathSpline(coords_list)
-        tangents = tuple(
-            spline.tangent_at(spline.path_distances[idx])
-            for idx in [left_idx, right_idx]
+        tangents = (
+            spline.tangent_at(spline.path_distances[left_idx]),
+            spline.tangent_at(spline.path_distances[right_idx]),
         )
         return nodes, tangents
 
