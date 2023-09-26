@@ -19,6 +19,7 @@ from autode.bracket.base import BaseBracketMethod
 from autode.opt.coordinates import CartesianCoordinates
 from autode.opt.optimisers.rfo import RFOptimiser
 from autode.opt.optimisers.hessian_update import BFGSSR1Update, BFGSPDUpdate
+from autode.log import logger
 
 if TYPE_CHECKING:
     from autode.species.species import Species
@@ -108,30 +109,6 @@ class TangentQNROptimiser(RFOptimiser):
 
         self._take_step_within_trust_radius(delta_s)
 
-    def _get_adjusted_step(self, delta_s):
-        s_hat = delta_s / np.linalg.norm(delta_s)
-        # Determine the scaling factor from eqn (8) in ref [2]
-        if self.iteration == 0:
-            guess_alpha = self.alpha  # not clear from paper!
-        else:
-            e_delta = float(max(self.last_energy_change, -self._eps))
-            guess_alpha = -2 * e_delta / np.dot(self._coords.g, s_hat)
-
-        def sigma_estimate(alpha):
-            return 1.0 - alpha / np.linalg.norm(
-                np.matmul(np.linalg.inv(self._coords.h), self._coords.g)
-            )
-
-        if sigma_estimate(guess_alpha) <= self._sigma:
-            return guess_alpha * s_hat
-        else:
-            for _ in range(50):
-                guess_alpha = guess_alpha * 0.95
-                if sigma_estimate(guess_alpha) <= self._sigma:
-                    return guess_alpha * s_hat
-
-            raise RuntimeError("Unable to find the correct step size")
-
 
 def _optimise_get_coords(species, tau, method, n_cores, maxiter):
     opt = TangentQNROptimiser(maxiter=maxiter, tangent=tau)
@@ -190,6 +167,17 @@ class FSMPath(EuclideanImagePair):
         maxiter_per_node: int,
         use_idpp: bool = True,
     ):
+        """
+        The freezing string, contains the previous coordinates and the
+        methods for growing the string inwards
+
+        Args:
+            left_image: The "reactant" species
+            right_image: The "product" species
+            step_size: Size of FSM interpolation step for growth
+            maxiter_per_node: maximum optimiser steps for each new node
+            use_idpp: whether to use IDPP interpolation or cartesian
+        """
         super().__init__(left_image=left_image, right_image=right_image)
 
         self._step_size = step_size  # todo distance
@@ -200,10 +188,20 @@ class FSMPath(EuclideanImagePair):
 
     @property
     def ts_guess(self) -> Optional["Species"]:
+        """
+        For FSM, the TS guess is the highest energy node
+
+        Returns:
+            (Species): The TS guess species
+        """
         energies = [coords.e for coords in self._total_history]
+
         assert all(en is not None for en in energies), "Energy value missing"
         peak_idx = np.argmax(energies)
-        assert peak_idx != 0 and peak_idx != len(self._total_history)
+        if peak_idx == 0 or peak_idx == len(self._total_history):
+            logger.warning("No peak found in FSM")
+            return None
+
         tmp_spc = self._left_image.new_species(name="peak")
         peak_coords = self._total_history[peak_idx]
         tmp_spc.coordinates = peak_coords
@@ -211,10 +209,32 @@ class FSMPath(EuclideanImagePair):
 
     @property
     def has_jumped_over_barrier(self) -> bool:
+        """Barrier check is not needed for FSM"""
         return False
 
-    def grow_string(self):
+    def _add_coordinates(
+        self, new_nodes: Tuple[CartesianCoordinates, CartesianCoordinates]
+    ) -> None:
+        """
+        Add optimised nodes to the string, and remove any translation
+        or rotation
 
+        Args:
+            new_nodes (tuple): The two new nodes in order (left and right)
+        """
+        left_new, right_new = new_nodes
+        _align_coords_to_ref(left_new, self.left_coords)
+        _align_coords_to_ref(right_new, self.right_coords)
+        self.left_coords = left_new
+        self.right_coords = right_new
+        return None
+
+    def grow_string(self):
+        """
+        Grow the string by adding two nodes: it performs Cartesian or
+        IDPP interpolation, chooses guess coordinates and then optimises
+        perpendicular to tangent.
+        """
         if self._use_idpp:
             nodes, tangents = self._get_new_coords_tangents_idpp()
         else:
@@ -297,10 +317,6 @@ class FSMPath(EuclideanImagePair):
             spline.tangent_at(spline.path_distances[right_idx]),
         )
         return nodes, tangents
-
-    def _add_coordinates(self, new_nodes: tuple):
-        # todo add new coords by removing translation and rotation
-        pass
 
     def estimate_energy_epsilon(self):
         assert self.left_coords.e and self.right_coords.e
