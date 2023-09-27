@@ -289,35 +289,32 @@ class FSMPath(EuclideanImagePair):
         Returns:
             (tuple):
         """
-        # take a high density interpolation and choose closest to step size
+        # take a high density interpolation and fit spline
         interp_density = max(int(self.dist / self._step_size), 1) * 10
         idpp = NEB.from_end_points(
             self._left_image, self._right_image, num=interp_density
         )
-        idpp.partition(max_delta=self._step_size)
         assert len(idpp.images) > 2
-        coords_list: List[CartesianCoordinates] = []
-        for point in idpp.images:
+        # remove rotation
+        last_coords = None
+        for idx, point in enumerate(idpp.images):
             coords = CartesianCoordinates(point.coordinates)
-            if len(coords_list) > 0:
-                _align_coords_to_ref(coords, coords_list[-1])
-            coords_list.append(coords)
+            if last_coords is not None:
+                _align_coords_to_ref(coords, last_coords)
+            idpp.images[idx].coordinates = coords
+            last_coords = coords
 
-        left_dists, right_dists = [], []
-        for coords in coords_list:
-            left_dists.append(np.linalg.norm(self.left_coords - coords))
-            right_dists.append(np.linalg.norm(self.right_coords - coords))
-        left_idx = np.argmin(np.abs(np.array(left_dists) - self._step_size))
-        right_idx = np.argmin(np.abs(np.array(right_dists) - self._step_size))
-        assert np.isclose(left_dists[left_idx], self._step_size, rtol=5e-2)
-        assert np.isclose(right_dists[right_idx], self._step_size, rtol=5e-2)
-        nodes = (coords_list[left_idx], coords_list[right_idx])
-        spline = CubicPathSpline(coords_list)
-        tangents = (
-            spline.tangent_at(spline.path_distances[left_idx]),
-            spline.tangent_at(spline.path_distances[right_idx]),
+        spline = CubicPathSpline.from_species_list(idpp.images)
+        left_length = spline.integrate_upto_length(self._step_size)
+        right_length = spline.integrate_upto_length(
+            spline.path_integral() - self._step_size
         )
-        return nodes, tangents
+        left_new = CartesianCoordinates(spline.coords_at(left_length))
+        left_tau = spline.tangent_at(left_length)
+        right_new = CartesianCoordinates(spline.coords_at(right_length))
+        right_tau = spline.tangent_at(right_length)
+
+        return (left_new, right_new), (left_tau, right_tau)
 
 
 class FSM(BaseBracketMethod):
