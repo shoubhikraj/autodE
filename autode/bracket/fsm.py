@@ -294,6 +294,7 @@ class FSMPath(EuclideanImagePair):
         idpp = NEB.from_end_points(
             self._left_image, self._right_image, num=interp_density
         )
+        idpp.partition(max_delta=self._step_size)
         assert len(idpp.images) > 2
         coords_list: List[CartesianCoordinates] = []
         for point in idpp.images:
@@ -306,8 +307,8 @@ class FSMPath(EuclideanImagePair):
         for coords in coords_list:
             left_dists.append(np.linalg.norm(self.left_coords - coords))
             right_dists.append(np.linalg.norm(self.right_coords - coords))
-        left_idx = np.argmin(np.array(left_dists) - self._step_size)
-        right_idx = np.argmin(np.array(right_dists) - self._step_size)
+        left_idx = np.argmin(np.abs(np.array(left_dists) - self._step_size))
+        right_idx = np.argmin(np.abs(np.array(right_dists) - self._step_size))
         assert np.isclose(left_dists[left_idx], self._step_size, rtol=5e-2)
         assert np.isclose(right_dists[right_idx], self._step_size, rtol=5e-2)
         nodes = (coords_list[left_idx], coords_list[right_idx])
@@ -326,7 +327,7 @@ class FSM(BaseBracketMethod):
         final_species,
         step_size: float = 0.2,
         maxiter_per_node: int = 6,
-        use_idpp: bool = False,
+        use_idpp: bool = True,
         *args,
         **kwargs,
     ):
