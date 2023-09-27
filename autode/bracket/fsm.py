@@ -18,7 +18,7 @@ from autode.bracket.imagepair import EuclideanImagePair
 from autode.bracket.base import BaseBracketMethod
 from autode.opt.coordinates import CartesianCoordinates
 from autode.opt.optimisers.rfo import RFOptimiser
-from autode.opt.optimisers.hessian_update import BFGSSR1Update, BFGSPDUpdate
+from autode.opt.optimisers.hessian_update import BFGSSR1Update, BFGSUpdate
 from autode.log import logger
 
 if TYPE_CHECKING:
@@ -30,11 +30,9 @@ class TangentQNROptimiser(RFOptimiser):
         self,
         maxiter: int,
         tangent: np.ndarray,
-        energy_eps: Union[PotentialEnergy, float],
         gtol=1e-3,
         etol=1e-4,
         max_step: float = 0.06,
-        line_search_sigma: float = 0.7,
     ):
         super().__init__(
             init_alpha=max_step,
@@ -45,9 +43,7 @@ class TangentQNROptimiser(RFOptimiser):
         # todo remove translation rotation before generating tangent
         self._tau_hat = tangent / np.linalg.norm(tangent)
         # prefer BFGS as it is good for minimisation
-        self._hessian_update_types = [BFGSPDUpdate, BFGSSR1Update]
-        self._eps = PotentialEnergy(energy_eps).to("Ha")
-        self._sigma = abs(float(line_search_sigma))
+        self._hessian_update_types = [BFGSUpdate, BFGSSR1Update]
 
     def _update_gradient_and_energy(self) -> None:
         """
@@ -102,7 +98,7 @@ class TangentQNROptimiser(RFOptimiser):
         delta_s = np.zeros_like(self._coords)
 
         for i in range(h_n):
-            if b <= 1.0e-14:
+            if b[i] <= 1.0e-14:
                 continue
                 # todo check below formula
             delta_s -= f[i] * u[:, i] / (b[i] - shift_lmda)
@@ -113,7 +109,7 @@ class TangentQNROptimiser(RFOptimiser):
 def _optimise_get_coords(species, tau, method, n_cores, maxiter):
     opt = TangentQNROptimiser(maxiter=maxiter, tangent=tau)
     opt.run(species, method, n_cores)
-    return CartesianCoordinates(species.coordinates), opt.iteration
+    return opt.final_coordinates, opt.iteration
 
 
 def _parallel_optimise_tangent(
@@ -121,6 +117,11 @@ def _parallel_optimise_tangent(
 ):
     # TODO: species list and tau list
     # todo check these formula
+    mols = []
+    for i, coords in enumerate(new_nodes):
+        mol = species.new_species(name=species.name + f"{i}")
+        mol.coordinates = coords
+        mols.append(mol)
 
     n_procs = 2 if n_cores > 2 else 1
     n_cores_pp = max(int(n_cores // 2), 1)
@@ -129,7 +130,7 @@ def _parallel_optimise_tangent(
             pool.submit(
                 _optimise_get_coords, mol, tau, method, n_cores_pp, maxiter
             )
-            for mol, tau in zip(new_nodes, taus)
+            for mol, tau in zip(mols, taus)
         ]
         result = [job.result() for job in jobs]
 
@@ -183,7 +184,6 @@ class FSMPath(EuclideanImagePair):
         self._step_size = step_size  # todo distance
         self._max_n = abs(int(maxiter_per_node))
         assert self._max_n > 0
-        self._energy_eps = 0.0
         self._use_idpp = bool(use_idpp)
 
     @property
@@ -301,7 +301,7 @@ class FSMPath(EuclideanImagePair):
             if len(coords_list) > 0:
                 _align_coords_to_ref(coords, coords_list[-1])
             coords_list.append(coords)
-        assert np.all((coords_list[-1] - self.right_coords) < 1.0e-10)
+
         left_dists, right_dists = [], []
         for coords in coords_list:
             left_dists.append(np.linalg.norm(self.left_coords - coords))
@@ -318,16 +318,6 @@ class FSMPath(EuclideanImagePair):
         )
         return nodes, tangents
 
-    def estimate_energy_epsilon(self):
-        assert self.left_coords.e and self.right_coords.e
-        delta_e = abs(self.left_coords.e - self.right_coords.e)
-        upper_lim = PotentialEnergy(2.5, "kcal/mol")
-        if delta_e < upper_lim:
-            self._energy_eps = float(delta_e.to("Ha"))
-        else:
-            self._energy_eps = float(upper_lim.to("Ha"))
-        return None
-
 
 class FSM(BaseBracketMethod):
     def __init__(
@@ -340,6 +330,9 @@ class FSM(BaseBracketMethod):
         *args,
         **kwargs,
     ):
+        # todo remove args, put maxiter here
+        assert "cineb_at_conv" not in kwargs.keys()
+        # todo warn if dist_tol set
         super().__init__(
             initial_species=initial_species, final_species=final_species
         )
@@ -351,6 +344,12 @@ class FSM(BaseBracketMethod):
             use_idpp=use_idpp,
         )
         self._current_microiters = 0
+        # self._dist_tol = step_size
+        # todo step size as Distance
+
+    def _log_convergence(self) -> None:
+        # todo fix error with logging energy is None?
+        return None
 
     @property
     def _macro_iter(self) -> int:
@@ -365,8 +364,7 @@ class FSM(BaseBracketMethod):
         self._current_microiters = value
 
     def _initialise_run(self) -> None:
-        self.imgpair.update_both_img_engrad()
-        self.imgpair.estimate_energy_epsilon()
+        return None
 
     def _step(self) -> None:
         iters = self.imgpair.grow_string()
