@@ -242,3 +242,52 @@ class Distances(_FunctionOfDistances):
 class AnyPIC(PIC):
     def _populate_all(self, x: np.ndarray) -> None:
         raise RuntimeError("Cannot populate all on an AnyPIC instance")
+
+
+def impose_primitive_constraint(
+    current_x: CartesianCoordinates,
+    pic: PIC,
+    target_q: np.ndarray,
+    q_weights: np.ndarray,
+):
+    """
+    Impose a desired primitive internal coordinate on a Cartesian
+    coordinate by performing weighted least squares minimisation
+
+    Args:
+        current_x (CartesianCoordinates): Current set of Cartesian coords
+        pic (PIC): Primitive internal coordinates set
+        target_q (np.ndarray) : The target value of primitives
+        q_weights (np.ndarray): Least square weights for each primitive
+
+    Returns:
+        (CartesianCoordinates): The Cartesian coordinate that is closest to
+                                the desired value of primitives
+    """
+    target_q = target_q.flatten()
+    q_weights = q_weights.flatten()
+    assert isinstance(pic, PIC) and isinstance(target_q, np.ndarray)
+    assert len(target_q) == len(q_weights)
+
+    def squared_error_and_deriv(x):
+        q = pic(x)
+        assert len(q) == len(target_q)
+        wt_err = np.sum(np.square(q - target_q) * q_weights)
+        # todo check this formula
+        wt_err_der = np.sum((pic.B * q - pic.B * target_q) * q_weights * 2)
+        return wt_err, wt_err_der
+
+    from scipy.optimize import minimize
+
+    res = minimize(
+        squared_error_and_deriv,
+        x0=current_x,
+        jac=True,
+        method="CG",  # choose one with xtol = 1e-5
+        options={
+            "maxiter": 7000,
+        },
+    )
+    assert res.success
+
+    return CartesianCoordinates(res.x)
