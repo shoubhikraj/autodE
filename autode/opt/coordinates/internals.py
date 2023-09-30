@@ -283,10 +283,8 @@ def impose_primitive_constraint(
         squared_error_and_deriv,
         x0=current_x,
         jac=True,
-        method="CG",  # choose one with xtol = 1e-5
-        options={
-            "maxiter": 7000,
-        },
+        method="CG",
+        options={"maxiter": 7000, "gtol": 1e-8},
     )
     assert res.success
 
