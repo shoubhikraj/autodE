@@ -16,6 +16,8 @@ from autode.opt.coordinates.primitives import (
     InverseDistance,
     Primitive,
     Distance,
+    ConstrainedDistance,
+    BondAngle,
     DihedralAngle,
 )
 
@@ -244,8 +246,32 @@ class AnyPIC(PIC):
         raise RuntimeError("Cannot populate all on an AnyPIC instance")
 
 
-def impose_primitive_constraint(
-    current_x: CartesianCoordinates,
+def build_pic_from_graph(
+    species, graph, aux_bonds=True, linear_bends=False, robust_dihedrals=False
+):
+    # first put the bonds into the list
+    pic = AnyPIC()
+
+    # add the constraints to the list
+    if species.constraints.distance is not None:
+        for (i, j) in species.constraints.distance:
+            graph.add_edge(i, j)
+
+    for (i, j) in sorted(graph.edges):
+        if (
+            species.constraints.distance is not None
+            and (i, j) in species.constraints.distance
+        ):
+            r = species.constraints.distance[(i, j)]
+            pic.append(ConstrainedDistance(i, j, r))
+        else:
+            pic.append(Distance(i, j))
+
+    pass
+
+
+def minimise_primitive_lstsq(
+    current_x: "CartesianCoordinates",
     pic: PIC,
     target_q: np.ndarray,
     q_weights: np.ndarray,
@@ -270,7 +296,8 @@ def impose_primitive_constraint(
     assert len(target_q) == len(q_weights)
 
     def squared_error_and_deriv(x):
-        q = pic(x)
+        q = pic.close_to(x, target_q)
+        # todo raise exception if angle becomes 180 degrees?
         assert len(q) == len(target_q)
         wt_err = np.sum(np.square(q - target_q) * q_weights)
         # todo check this formula

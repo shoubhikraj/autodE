@@ -136,6 +136,10 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
         logger.info(f"Transformed in      ...{time() - start_time:.4f} s")
         return dic
 
+    @classmethod
+    def from_species(cls, species):
+        graph = species.graph.copy()
+
     def _update_g_from_cart_g(self, arr: Optional["Gradient"]) -> None:
         """
         Updates the gradient from a calculated Cartesian gradient
