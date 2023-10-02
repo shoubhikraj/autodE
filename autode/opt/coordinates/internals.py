@@ -8,6 +8,7 @@ q : Primitive internal coordinates
 G : Spectroscopic G matrix
 """
 import itertools
+from enum import Enum
 import numpy as np
 
 from typing import Any, Optional, Type, List, TYPE_CHECKING
@@ -285,13 +286,31 @@ def _add_distances_from_species(pic, species, core_graph):
     assert n == species.constraints.n_distance
 
 
-def _add_bends_from_species(pic, species, core_graph, linear_bends=False):
+class LinearAngleType(Enum):
+    linear_bend = 1
+    cos_angle = 2
+    remove = 3
+
+
+def _add_bends_from_species(
+    pic, species, core_graph, linear_angles=LinearAngleType.linear_bend
+):
     for o in range(species.n_atoms):
         for (n, m) in itertools.combinations(core_graph.neighbors(o), r=2):
             if species.angle(m, o, n) < Angle(175, "deg"):
                 pic.append(BondAngle(o=o, m=m, n=n))
-            elif linear_bends:
+            elif linear_angles == LinearAngleType.linear_bend:
                 pass  # todo linear bends
+            elif linear_angles == LinearAngleType.cos_angle:
+                pass
+            elif linear_angles == LinearAngleType.remove:
+                pass
+            else:
+                raise Exception(
+                    "Linear angle handling method not properly defined"
+                )
+
+    return None
 
 
 def _add_dihedrals_from_species(
@@ -325,6 +344,8 @@ def _add_dihedrals_from_species(
                     pass  # todo robust dihedrals
                 else:
                     pic.append(DihedralAngle(m, o, p, n))
+
+    return None
 
 
 def minimise_primitive_lstsq(
