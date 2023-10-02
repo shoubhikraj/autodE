@@ -276,15 +276,49 @@ def build_pic_from_graph(
             pic.append(ConstrainedDistance(i, j, r))
         else:
             pic.append(Distance(i, j))
+    pass
 
+
+def _add_bends_from_species(pic, species, core_graph, linear_bends=False):
     for o in range(species.n_atoms):
-        for (n, m) in itertools.combinations(graph.neighbors(o), r=2):
+        for (n, m) in itertools.combinations(core_graph.neighbors(o), r=2):
             if species.angle(m, o, n) < Angle(175, "deg"):
                 pic.append(BondAngle(o=o, m=m, n=n))
             elif linear_bends:
                 pass  # todo linear bends
 
-    pass
+
+def _add_dihedrals_from_species(
+    pic, species, core_graph, robust_dihedrals=False
+):
+    # no dihedrals possible with less than 4 atoms
+    if species.n_atoms < 4:
+        return
+
+    for (o, p) in core_graph.edges:
+        for m in species.graph.neighbors(o):
+            if m == p:
+                continue
+
+            if species.angle(m, o, p) > Angle(175, "deg"):
+                continue
+
+            for n in species.graph.neighbors(p):
+                if n == o:
+                    continue
+
+                is_linear_1 = species.angle(m, o, p) > Angle(175, "deg")
+                is_linear_2 = species.angle(o, p, n) > Angle(175, "deg")
+
+                # don't add when both angles are linear
+                if is_linear_1 and is_linear_2:
+                    continue
+
+                # if only one angle linear, add robust dihedral
+                if (is_linear_1 or is_linear_2) and robust_dihedrals:
+                    pass  # todo robust dihedrals
+                else:
+                    pic.append(DihedralAngle(m, o, p, n))
 
 
 def minimise_primitive_lstsq(
