@@ -267,16 +267,22 @@ def build_pic_from_graph(
         for (i, j) in species.constraints.distance:
             graph.add_edge(i, j)
 
-    for (i, j) in sorted(graph.edges):
+    pass
+
+
+def _add_distances_from_species(pic, species, core_graph):
+    n = 0
+    for (i, j) in sorted(core_graph.edges):
         if (
             species.constraints.distance is not None
             and (i, j) in species.constraints.distance
         ):
             r = species.constraints.distance[(i, j)]
             pic.append(ConstrainedDistance(i, j, r))
+            n += 1
         else:
             pic.append(Distance(i, j))
-    pass
+    assert n == species.constraints.n_distance
 
 
 def _add_bends_from_species(pic, species, core_graph, linear_bends=False):
@@ -314,7 +320,7 @@ def _add_dihedrals_from_species(
                 if is_linear_1 and is_linear_2:
                     continue
 
-                # if only one angle linear, add robust dihedral
+                # if only one angle almost linear, add robust dihedral
                 if (is_linear_1 or is_linear_2) and robust_dihedrals:
                     pass  # todo robust dihedrals
                 else:
