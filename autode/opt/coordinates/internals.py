@@ -7,10 +7,12 @@ B : Wilson B matrix
 q : Primitive internal coordinates
 G : Spectroscopic G matrix
 """
+import itertools
 import numpy as np
 
 from typing import Any, Optional, Type, List, TYPE_CHECKING
 from abc import ABC, abstractmethod
+from autode.values import Angle
 from autode.opt.coordinates.base import OptCoordinates, CartesianComponent
 from autode.opt.coordinates.primitives import (
     InverseDistance,
@@ -246,8 +248,16 @@ class AnyPIC(PIC):
         raise RuntimeError("Cannot populate all on an AnyPIC instance")
 
 
+def build_redundant_pic(species):
+    # start with the original graph
+    graph = species.graph.copy()
+    # todo add constraints to graph here
+
+    pass
+
+
 def build_pic_from_graph(
-    species, graph, aux_bonds=True, linear_bends=False, robust_dihedrals=False
+    species, graph, aux_bonds=False, linear_bends=False, robust_dihedrals=False
 ):
     # first put the bonds into the list
     pic = AnyPIC()
@@ -266,6 +276,13 @@ def build_pic_from_graph(
             pic.append(ConstrainedDistance(i, j, r))
         else:
             pic.append(Distance(i, j))
+
+    for o in range(species.n_atoms):
+        for (n, m) in itertools.combinations(graph.neighbors(o), r=2):
+            if species.angle(m, o, n) < Angle(175, "deg"):
+                pic.append(BondAngle(o=o, m=m, n=n))
+            elif linear_bends:
+                pass  # todo linear bends
 
     pass
 
