@@ -257,21 +257,30 @@ def build_redundant_pic(species):
     pass
 
 
+class LinearAngleType(Enum):
+    linear_bend = 1
+    cos_angle = 2
+    remove = 3
+
+
 def build_pic_from_graph(
-    species, graph, aux_bonds=False, linear_bends=False, robust_dihedrals=False
+    species,
+    core_graph,
+    aux_bonds=False,
+    linear_angles=LinearAngleType.remove,
+    robust_dihedrals=False,
 ):
-    # first put the bonds into the list
     pic = AnyPIC()
+    _add_distances_from_species(pic, species, core_graph, aux_bonds=aux_bonds)
+    _add_bends_from_species(
+        pic, species, core_graph, linear_angles=linear_angles
+    )
+    _add_dihedrals_from_species(
+        pic, species, core_graph, robust_dihedrals=robust_dihedrals
+    )
 
-    # add the constraints to the list
-    if species.constraints.distance is not None:
-        for (i, j) in species.constraints.distance:
-            graph.add_edge(i, j)
 
-    pass
-
-
-def _add_distances_from_species(pic, species, core_graph):
+def _add_distances_from_species(pic, species, core_graph, aux_bonds=True):
     n = 0
     for (i, j) in sorted(core_graph.edges):
         if (
@@ -285,11 +294,15 @@ def _add_distances_from_species(pic, species, core_graph):
             pic.append(Distance(i, j))
     assert n == species.constraints.n_distance
 
+    if not aux_bonds:
+        return None
 
-class LinearAngleType(Enum):
-    linear_bend = 1
-    cos_angle = 2
-    remove = 3
+    for (i, j) in itertools.combinations(range(species.n_atoms), r=2):
+        if core_graph.has_edge(i, j):
+            continue
+        if species.distance(i, j) < 2.5 * species.eqm_bond_distance(i, j):
+            pic.append(Distance(i, j))
+    return None
 
 
 def _add_bends_from_species(
@@ -330,6 +343,10 @@ def _add_dihedrals_from_species(
 
             for n in species.graph.neighbors(p):
                 if n == o:
+                    continue
+
+                # avoid triangle rings like cyclopropane
+                if n == m:
                     continue
 
                 is_linear_1 = species.angle(m, o, p) > Angle(175, "deg")
