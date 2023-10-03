@@ -341,6 +341,48 @@ class ConstrainedPrimitiveBondAngle(ConstrainedPrimitive, PrimitiveBondAngle):
         )
 
 
+class PrimitiveLinearBend(Primitive):
+    """Linear Bend coordinate for an almost linear bond angle"""
+
+    def __init__(self, o: int, m: int, n: int, orth_idx: int):
+        """Linear angle m-o-n w.r.t axis"""
+        super().__init__(o, m, n)
+
+        self.o = o
+        self.m = m
+        self.n = n
+        self.orth_idx = orth_idx
+
+        self._axis = None
+
+    def _init_axis(self, x: "CartesianCoordinates") -> None:
+        """Initialise the orthogonal axis"""
+        _x = x.reshape(-1, 3)
+        s = _x[self.m, :] - _x[self.n, :]
+        s /= np.linalg.norm(s)
+        # choose cartesian axis with the lowest
+        cart_axes = np.eye(3)
+        dots = [np.dot(cart_axes[idx, :], s) for idx in range(3)]
+        self._axis = cart_axes[np.argmin(dots), :]
+        return None
+
+    def __call__(self, x: "CartesianCoordinates"):
+        """Value of the linear bend"""
+        if self._axis is None:
+            self._init_axis(x)
+
+        # generate two orthogonal vectors
+        _x = x.reshape(-1, 3)
+        s = _x[self.m, :] - _x[self.n, :]
+        w_1 = np.cross(s, self._axis)
+        w_1 /= np.linalg.norm(w_1)
+
+        w_2 = np.cross(s, self._axis)
+        w_2 /= np.linalg.norm(w_2)
+
+        # if orth_idx = 1, choose w_1 or choose w_2
+
+
 class PrimitiveDihedralAngle(Primitive):
     def __init__(self, m: int, o: int, p: int, n: int):
         """Dihedral angle: m-o-p-n"""
