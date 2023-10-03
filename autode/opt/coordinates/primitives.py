@@ -352,6 +352,7 @@ class PrimitiveLinearBend(Primitive):
         self.m = m
         self.n = n
         self.orth_idx = orth_idx
+        assert self.orth_idx in [1, 2]
 
         self._axis = None
 
@@ -366,7 +367,7 @@ class PrimitiveLinearBend(Primitive):
         self._axis = cart_axes[np.argmin(dots), :]
         return None
 
-    def __call__(self, x: "CartesianCoordinates"):
+    def __call__(self, x: "CartesianCoordinates") -> float:
         """Value of the linear bend"""
         if self._axis is None:
             self._init_axis(x)
@@ -377,7 +378,7 @@ class PrimitiveLinearBend(Primitive):
         w_1 = np.cross(s, self._axis)
         w_1 /= np.linalg.norm(w_1)
 
-        w_2 = np.cross(s, self._axis)
+        w_2 = np.cross(w_1, self._axis)
         w_2 /= np.linalg.norm(w_2)
 
         u = _x[self.m, :] - _x[self.o, :]
@@ -385,6 +386,22 @@ class PrimitiveLinearBend(Primitive):
         v = _x[self.n, :] - _x[self.o, :]
         v_norm = np.linalg.norm(v)
         # if orth_idx = 1, choose w_1 or choose w_2
+        if self.orth_idx == 1:
+            return w_1.dot(np.cross(u, v)) / (u_norm * v_norm)
+        else:
+            return w_2.dot(np.cross(u, v)) / (u_norm * v_norm)
+
+    def __eq__(self, other):
+        """Equality of linear bends"""
+        return (
+            isinstance(other, self.__class__)
+            and self.o == other.o
+            and self.orth_idx == other.orth_idx
+            and self._ordered_idxs == other._ordered_idxs
+        )
+
+    def __repr__(self):
+        return f"LinearBend({self.m}-{self.o}-{self.n}, {self.orth_idx})"
 
 
 class PrimitiveDihedralAngle(Primitive):
