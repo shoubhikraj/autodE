@@ -380,6 +380,10 @@ class PrimitiveLinearBend(Primitive):
         w_2 = np.cross(s, self._axis)
         w_2 /= np.linalg.norm(w_2)
 
+        u = _x[self.m, :] - _x[self.o, :]
+        u_norm = np.linalg.norm(u)
+        v = _x[self.n, :] - _x[self.o, :]
+        v_norm = np.linalg.norm(v)
         # if orth_idx = 1, choose w_1 or choose w_2
 
 
