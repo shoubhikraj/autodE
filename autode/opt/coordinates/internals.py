@@ -255,10 +255,25 @@ def build_pic_from_graph(
     aux_bonds=True,
 ) -> AnyPIC:
     pic = AnyPIC()
+    _add_distances_from_species(pic, species, core_graph, aux_bonds=aux_bonds)
+    _add_bends_from_species(pic, species, core_graph)
+    _add_dihedrals_from_species(pic, species, core_graph)
     return pic
 
 
 def _add_distances_from_species(pic, species, core_graph, aux_bonds=True):
+    """
+    Add distances
+
+    Args:
+        pic:
+        species:
+        core_graph:
+        aux_bonds:
+
+    Returns:
+
+    """
     for (i, j) in sorted(core_graph.edges):
         if (
             species.constraints.distance is not None
@@ -269,6 +284,16 @@ def _add_distances_from_species(pic, species, core_graph, aux_bonds=True):
         else:
             pic.append(PrimitiveDistance(i, j))
     assert species.constraints.n_distance == pic.n_constrained
+
+    if not aux_bonds:
+        return None
+
+    # add auxiliary bonds
+    for (i, j) in itertools.combinations(range(species.n_atoms), r=2):
+        if core_graph.has_edge(i, j):
+            continue
+        if species.distance(i, j) < 2.5 * species.eqm_bond_distance(i, j):
+            pic.append(PrimitiveDistance(i, j))
     return None
 
 
