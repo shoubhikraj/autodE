@@ -261,18 +261,19 @@ def build_pic_from_graph(
     return pic
 
 
-def _add_distances_from_species(pic, species, core_graph, aux_bonds=True):
+def _add_distances_from_species(
+    pic: "AnyPIC", species: "Species", core_graph, aux_bonds: bool = True
+) -> None:
     """
-    Add distances
+    Add distances from a species using the graph of core bonds
+    provided. Optionally, add auxiliary bonds. The AnyPIC
+    instance is modified in-place.
 
     Args:
-        pic:
-        species:
-        core_graph:
-        aux_bonds:
-
-    Returns:
-
+        pic (AnyPIC): An AnyPIC instance
+        species (Species): The species
+        core_graph: The graph of bonds
+        aux_bonds (bool): Whether to add auxiliary bonds or not
     """
     for (i, j) in sorted(core_graph.edges):
         if (
@@ -297,7 +298,7 @@ def _add_distances_from_species(pic, species, core_graph, aux_bonds=True):
     return None
 
 
-def _add_bends_from_species(pic, species, core_graph):
+def _add_bends_from_species(pic, species, core_graph) -> None:
     for o in range(species.n_atoms):
         for (n, m) in itertools.combinations(core_graph.neighbors(o), r=2):
             if species.angle(m, o, n) < Angle(175, "deg"):
@@ -306,7 +307,7 @@ def _add_bends_from_species(pic, species, core_graph):
     return None
 
 
-def _add_dihedrals_from_species(pic, species, core_graph):
+def _add_dihedrals_from_species(pic, species, core_graph) -> None:
     # no dihedral possible with less than 4 atoms
     if species.n_atoms < 4:
         return None
