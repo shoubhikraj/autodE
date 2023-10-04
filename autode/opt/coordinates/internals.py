@@ -7,19 +7,24 @@ B : Wilson B matrix
 q : Primitive internal coordinates
 G : Spectroscopic G matrix
 """
+import itertools
 import numpy as np
 
 from typing import Any, Optional, Type, List, TYPE_CHECKING
 from abc import ABC, abstractmethod
+from autode.values import Angle
 from autode.opt.coordinates.base import OptCoordinates, CartesianComponent
 from autode.opt.coordinates.primitives import (
     PrimitiveInverseDistance,
     Primitive,
     PrimitiveDistance,
+    ConstrainedPrimitiveDistance,
+    PrimitiveBondAngle,
     PrimitiveDihedralAngle,
 )
 
 if TYPE_CHECKING:
+    from autode.species import Species
     from autode.opt.coordinates.cartesian import CartesianCoordinates
     from autode.opt.coordinates.primitives import (
         ConstrainedPrimitive,
@@ -242,3 +247,65 @@ class PrimitiveDistances(_FunctionOfDistances):
 class AnyPIC(PIC):
     def _populate_all(self, x: np.ndarray) -> None:
         raise RuntimeError("Cannot populate all on an AnyPIC instance")
+
+
+def build_pic_from_graph(
+    species: "Species",
+    core_graph,
+    aux_bonds=True,
+) -> AnyPIC:
+    pic = AnyPIC()
+    return pic
+
+
+def _add_distances_from_species(pic, species, core_graph, aux_bonds=True):
+    for (i, j) in sorted(core_graph.edges):
+        if (
+            species.constraints.distance is not None
+            and (i, j) in species.constraints.distance
+        ):
+            r = species.constraints.distance[(i, j)]
+            pic.append(ConstrainedPrimitiveDistance(i, j, r))
+        else:
+            pic.append(PrimitiveDistance(i, j))
+    assert species.constraints.n_distance == pic.n_constrained
+    return None
+
+
+def _add_bends_from_species(pic, species, core_graph):
+    for o in range(species.n_atoms):
+        for (n, m) in itertools.combinations(core_graph.neighbors(o), r=2):
+            if species.angle(m, o, n) < Angle(175, "deg"):
+                pic.append(PrimitiveBondAngle(o=o, m=m, n=n))
+            # TODO: implement linear bends
+    return None
+
+
+def _add_dihedrals_from_species(pic, species, core_graph):
+    # no dihedral possible with less than 4 atoms
+    if species.n_atoms < 4:
+        return None
+
+    for (o, p) in core_graph.edges:
+        for m in core_graph.neighbors(o):
+            if m == p:
+                continue
+
+            for n in core_graph.neighbors(p):
+                if n == o:
+                    continue
+
+                # avoid triangle rings like cyclopropane
+                if n == m:
+                    continue
+
+                is_linear_1 = species.angle(m, o, p) > Angle(175, "deg")
+                is_linear_2 = species.angle(o, p, n) > Angle(175, "deg")
+
+                if is_linear_2 or is_linear_1:
+                    # TODO: implement robust dihedrals
+                    pass
+                else:
+                    pic.append(PrimitiveDihedralAngle(m, o, p, n))
+
+    return None
