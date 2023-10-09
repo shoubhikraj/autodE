@@ -280,10 +280,15 @@ def _add_distances_from_species(
             species.constraints.distance is not None
             and (i, j) in species.constraints.distance
         ):
-            r = species.constraints.distance[(i, j)]
-            pic.append(ConstrainedPrimitiveDistance(i, j, r))
+            continue
         else:
             pic.append(PrimitiveDistance(i, j))
+
+    if species.constraints.distance is not None:
+        for (i, j) in species.constraints.distance:
+            r = species.constraints.distance[(i, j)]
+            pic.append(ConstrainedPrimitiveDistance(i, j, r))
+
     assert species.constraints.n_distance == pic.n_constrained
 
     if not aux_bonds:
