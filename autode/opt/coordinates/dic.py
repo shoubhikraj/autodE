@@ -25,10 +25,12 @@ from autode.opt.coordinates.internals import (
     PIC,
     PrimitiveInverseDistances,
     InternalCoordinates,
+    build_pic_from_species,
 )
 from autode.exceptions import CoordinateTransformFailed
 
 if TYPE_CHECKING:
+    from autode.species.species import Species
     from autode.opt.coordinates import CartesianCoordinates, OptCoordinates
     from autode.values import Gradient
     from autode.hessians import Hessian
@@ -135,6 +137,23 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
 
         logger.info(f"Transformed in      ...{time() - start_time:.4f} s")
         return dic
+
+    @classmethod
+    def from_species(cls, species: "Species") -> "DIC":
+        """
+        Build a set of delocalised internal coordinates (DIC) from a
+        species and its connectivity graph
+
+        -----------------------------------------------------------------------
+        Arguments:
+            species: The species with a graph
+
+        Returns:
+            (DIC): Delocalised internal coordinates
+        """
+        primitives = build_pic_from_species(species=species)
+        x = CartesianCoordinates(species.coordinates)
+        return cls.from_cartesian(x, primitives=primitives)
 
     def _update_g_from_cart_g(self, arr: Optional["Gradient"]) -> None:
         """

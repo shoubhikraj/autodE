@@ -10,9 +10,10 @@ G : Spectroscopic G matrix
 import itertools
 import numpy as np
 
-from typing import Any, Optional, Tuple, Type, List, TYPE_CHECKING
+from typing import Any, Optional, Type, List, TYPE_CHECKING
 from abc import ABC, abstractmethod
 from autode.values import Angle
+from autode.constraints import DistanceConstraints
 from autode.opt.coordinates.base import OptCoordinates, CartesianComponent
 from autode.opt.coordinates.primitives import (
     PrimitiveInverseDistance,
@@ -249,38 +250,19 @@ class AnyPIC(PIC):
         raise RuntimeError("Cannot populate all on an AnyPIC instance")
 
 
-def build_redundant_pic_from_species(species):
-    n_dof = 3 * species.n_atoms - (5 if species.is_linear() else 6)
-    x = CartesianCoordinates(species.coordinates)
-
-    pic, dof = build_pic_from_graph(species, species.graph, aux_bonds=False)
-    if dof == n_dof:
-        return pic
-
-    pic, dof = build_pic_from_graph(species, species.graph, aux_bonds=True)
-    if dof == n_dof:
-        return pic
-    else:
-        raise RuntimeError("Unable to build coordinates")
-
-
-def build_pic_from_graph(
+def build_pic_from_species(
     species: "Species",
-    core_graph,
-    aux_bonds=True,
-) -> Tuple[AnyPIC, float]:
+) -> AnyPIC:
+    assert species.graph is not None
     pic = AnyPIC()
-    _add_distances_from_species(pic, species, core_graph, aux_bonds=aux_bonds)
-    _add_bends_from_species(pic, species, core_graph)
-    _add_dihedrals_from_species(pic, species, core_graph)
-    x = CartesianCoordinates(species.coordinates)
-    _ = pic(x)
-    dof = np.linalg.matrix_rank(pic.B)
-    return pic, dof
+    _add_distances_from_species(pic, species, aux_bonds=True)
+    _add_bends_from_species(pic, species)
+    _add_dihedrals_from_species(pic, species)
+    return pic
 
 
 def _add_distances_from_species(
-    pic: "AnyPIC", species: "Species", core_graph, aux_bonds: bool = True
+    pic: "AnyPIC", species: "Species", aux_bonds: bool = True
 ) -> None:
     """
     Add distances from a species using the graph of core bonds
@@ -290,24 +272,25 @@ def _add_distances_from_species(
     Args:
         pic (AnyPIC): An AnyPIC instance
         species (Species): The species
-        core_graph: The graph of bonds
         aux_bonds (bool): Whether to add auxiliary bonds or not
     """
+    core_graph = species.graph
+    assert core_graph is not None
+    constraints = species.constraints.distance
+    if constraints is None:
+        constraints = DistanceConstraints()
+
     for (i, j) in sorted(core_graph.edges):
-        if (
-            species.constraints.distance is not None
-            and (i, j) in species.constraints.distance
-        ):
+        if (i, j) in constraints:
             continue
         else:
             pic.append(PrimitiveDistance(i, j))
 
-    if species.constraints.distance is not None:
-        for (i, j) in species.constraints.distance:
-            r = species.constraints.distance[(i, j)]
-            pic.append(ConstrainedPrimitiveDistance(i, j, r))
+    for (i, j) in constraints:
+        r = constraints[(i, j)]
+        pic.append(ConstrainedPrimitiveDistance(i, j, r))
 
-    assert species.constraints.n_distance == pic.n_constrained
+    assert len(constraints) == pic.n_constrained
 
     if not aux_bonds:
         return None
@@ -321,7 +304,7 @@ def _add_distances_from_species(
     return None
 
 
-def _add_bends_from_species(pic, species, core_graph) -> None:
+def _add_bends_from_species(pic, species) -> None:
     """
     Add all bond angle (i.e. valence angles) from a species and
     its graph, avoiding angles that are close to 180 degrees. The
@@ -330,8 +313,8 @@ def _add_bends_from_species(pic, species, core_graph) -> None:
     Args:
         pic (AnyPIC): An AnyPIC instance
         species (Species): The species
-        core_graph: The graph of bonds
     """
+    core_graph = species.graph
     for o in range(species.n_atoms):
         for (n, m) in itertools.combinations(core_graph.neighbors(o), r=2):
             if species.angle(m, o, n) < Angle(175, "deg"):
@@ -340,7 +323,7 @@ def _add_bends_from_species(pic, species, core_graph) -> None:
     return None
 
 
-def _add_dihedrals_from_species(pic, species, core_graph) -> None:
+def _add_dihedrals_from_species(pic, species) -> None:
     """
     Add all dihedral angles (i.e. torsions) from a species and
     its graph, avoiding cases where any one of the adjacent pair of
@@ -350,8 +333,8 @@ def _add_dihedrals_from_species(pic, species, core_graph) -> None:
     Args:
         pic (AnyPIC): An AnyPIC instance
         species (Species): The species
-        core_graph: The graph of bonds
     """
+    core_graph = species.graph
     # no dihedral possible with less than 4 atoms
     if species.n_atoms < 4:
         return None
@@ -374,7 +357,7 @@ def _add_dihedrals_from_species(pic, species, core_graph) -> None:
 
                 if is_linear_2 or is_linear_1:
                     # TODO: implement robust dihedrals
-                    pass
+                    continue
                 else:
                     pic.append(PrimitiveDihedralAngle(m, o, p, n))
 
