@@ -259,6 +259,7 @@ def build_pic_from_species(
         raise RuntimeError(
             "Unable to build coordinates, connectivity graph is missing"
         )
+    _join_fragments(species)
     pic = AnyPIC()
     _add_distances_from_species(pic, species, aux_bonds=True)
     _add_bends_from_species(pic, species)
@@ -280,6 +281,16 @@ def _join_fragments(species: "Species") -> None:
     frags = list(species.graph.connected_fragments())
     if len(frags) == 1:
         return None
+
+    for (frag1, frag2) in itertools.combinations(frags, r=2):
+        distances = []
+        atom_pairs = []
+        for (i, j) in itertools.product(frag1, frag2):
+            atom_pairs.append((i, j))
+            distances.append(species.distance(i, j))
+        min_pair = atom_pairs[np.argmin(distances)]
+        species.graph.add_edge(*min_pair, pi=False, active=False)
+    return None
 
 
 def _add_distances_from_species(
