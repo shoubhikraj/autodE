@@ -253,12 +253,33 @@ class AnyPIC(PIC):
 def build_pic_from_species(
     species: "Species",
 ) -> AnyPIC:
-    assert species.graph is not None
+    # take a copy so that modifications do not affect original
+    species = species.copy()
+    if species.graph is None:
+        raise RuntimeError(
+            "Unable to build coordinates, connectivity graph is missing"
+        )
     pic = AnyPIC()
     _add_distances_from_species(pic, species, aux_bonds=True)
     _add_bends_from_species(pic, species)
     _add_dihedrals_from_species(pic, species)
     return pic
+
+
+def _join_fragments(species: "Species") -> None:
+    """
+    In case the graph of the species has separated fragments
+    they must be connected in order to obtain redundant set
+    of primitives
+
+    Args:
+        species (Species):
+    """
+    # todo join fragments and constraints
+    assert species.graph is not None
+    frags = list(species.graph.connected_fragments())
+    if len(frags) == 1:
+        return None
 
 
 def _add_distances_from_species(

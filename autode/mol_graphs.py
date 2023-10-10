@@ -4,7 +4,7 @@ import numpy as np
 
 from copy import deepcopy
 from networkx.algorithms import isomorphism
-from typing import Optional, List, Tuple, TYPE_CHECKING
+from typing import Optional, List, Tuple, Iterator, Set, TYPE_CHECKING
 from autode.utils import timeout
 import autode.exceptions as ex
 from scipy.spatial import distance_matrix
@@ -22,6 +22,18 @@ class MolecularGraph(nx.Graph):
             f"MolecularGraph(|E| = {self.number_of_edges()}, "
             f"|V| = {self.number_of_nodes()})"
         )
+
+    def connected_fragments(self) -> Iterator[Set[int]]:
+        """
+        If a graph is disconnected, i.e. there are fragments which
+        have no connection, return the set of nodes for all such
+        fragments
+
+        Returns:
+            (Iterator[Set[int]]): A generator containing sets of the
+                                node indices of each fragment
+        """
+        return nx.connected_components(self)
 
     @property
     def expected_planar_geometry(self) -> bool:
