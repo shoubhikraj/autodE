@@ -12,7 +12,7 @@ import numpy as np
 
 from typing import Any, Optional, Type, List, TYPE_CHECKING
 from abc import ABC, abstractmethod
-from autode.values import Angle
+from autode.values import Angle, Distance
 from autode.constraints import DistanceConstraints
 from autode.opt.coordinates.base import OptCoordinates, CartesianComponent
 from autode.opt.coordinates.primitives import (
@@ -259,7 +259,6 @@ def build_pic_from_species(
         raise RuntimeError(
             "Unable to build coordinates, connectivity graph is missing"
         )
-    _join_fragments(species)
     pic = AnyPIC()
     _add_distances_from_species(pic, species, aux_bonds=True)
     _add_bends_from_species(pic, species)
@@ -306,6 +305,38 @@ def _add_distances_from_species(
         species (Species): The species
         aux_bonds (bool): Whether to add auxiliary bonds or not
     """
+    # interfragment bonds and constraints should be in "core" graph
+    assert species.graph is not None
+    constraints = species.constraints.distance
+    if constraints is None:
+        constraints = DistanceConstraints()
+
+    for (i, j) in constraints:
+        species.graph.add_edge(i, j, pi=False, active=False)
+
+    frags = list(species.graph.connected_fragments())
+    if len(frags) != 1:
+        for (frag1, frag2) in itertools.combinations(frags, r=2):
+            distances = []
+            atom_pairs = []
+            for (i, j) in itertools.product(frag1, frag2):
+                atom_pairs.append((i, j))
+                distances.append(species.distance(i, j))
+            # min interfragment distance is a core bond
+            min_pair = atom_pairs[np.argmin(distances)]
+            species.graph.add_edge(*min_pair, pi=False, active=False)
+
+            if aux_bonds:
+                # add auxiliary interfragment bonds
+                min_dist = min(distances)
+                for idx, (i, j) in enumerate(atom_pairs):
+                    if (
+                        distances[idx] < 1.3 * min_dist
+                        or distances[idx] < Distance(2.0, "ang")
+                    ) and species.graph.has_edge(i, j):
+                        pic.append(PrimitiveDistance(i, j))
+
+    # now we iterate over the "core" bonds
     core_graph = species.graph
     assert core_graph is not None
     constraints = species.constraints.distance
@@ -314,20 +345,17 @@ def _add_distances_from_species(
 
     for (i, j) in sorted(core_graph.edges):
         if (i, j) in constraints:
-            continue
+            r = constraints[(i, j)]
+            pic.append(ConstrainedPrimitiveDistance(i, j, r))
         else:
             pic.append(PrimitiveDistance(i, j))
-
-    for (i, j) in constraints:
-        r = constraints[(i, j)]
-        pic.append(ConstrainedPrimitiveDistance(i, j, r))
 
     assert len(constraints) == pic.n_constrained
 
     if not aux_bonds:
         return None
 
-    # add auxiliary bonds
+    # add auxiliary "extra-redundant" bonds
     for (i, j) in itertools.combinations(range(species.n_atoms), r=2):
         if core_graph.has_edge(i, j):
             continue
