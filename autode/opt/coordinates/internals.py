@@ -266,11 +266,12 @@ def build_pic_from_species(
     return pic
 
 
-def _join_fragments(species: "Species") -> None:
+def _join_fragments(pic, species: "Species", aux_interfrag=False) -> None:
     """
     In case the graph of the species has separated fragments
     they must be connected in order to obtain redundant set
-    of primitives
+    of primitives. The PIC instance and the graph of the species
+    may be modified in-place.
 
     Args:
         species (Species):
@@ -278,6 +279,12 @@ def _join_fragments(species: "Species") -> None:
     # todo join fragments and constraints
     assert species.graph is not None
     frags = list(species.graph.connected_fragments())
+    constraints = species.constraints.distance
+    if constraints is None:
+        constraints = DistanceConstraints()
+
+    for (i, j) in constraints:
+        species.graph.add_edge(i, j, pi=False, active=False)
     if len(frags) == 1:
         return None
 
@@ -287,8 +294,18 @@ def _join_fragments(species: "Species") -> None:
         for (i, j) in itertools.product(frag1, frag2):
             atom_pairs.append((i, j))
             distances.append(species.distance(i, j))
+        # min interfragment distances is a "core" bond
         min_pair = atom_pairs[np.argmin(distances)]
         species.graph.add_edge(*min_pair, pi=False, active=False)
+        # add auxiliary interfragment bonds
+        if aux_interfrag:
+            min_dist = min(distances)
+            for idx, (i, j) in enumerate(atom_pairs):
+                if (
+                    distances[idx] < 1.3 * min_dist
+                    or distances[idx] < Distance(2.0, "ang")
+                ) and not species.graph.has_edge(i, j):
+                    pic.append(PrimitiveDistance(i, j))
     return None
 
 
