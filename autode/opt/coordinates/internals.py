@@ -10,9 +10,10 @@ G : Spectroscopic G matrix
 import itertools
 import numpy as np
 
-from typing import Any, Optional, Type, List, TYPE_CHECKING
+from typing import Any, Optional, Tuple, Type, List, TYPE_CHECKING
 from abc import ABC, abstractmethod
 from autode.values import Angle, Distance
+from autode.mol_graphs import make_graph
 from autode.constraints import DistanceConstraints
 from autode.opt.coordinates.base import OptCoordinates, CartesianComponent
 from autode.opt.coordinates.primitives import (
@@ -250,20 +251,43 @@ class AnyPIC(PIC):
         raise RuntimeError("Cannot populate all on an AnyPIC instance")
 
 
-def build_pic_from_species(
+def build_redundant_pic_from_species(species):
+    species = species.copy()
+    n_dof = 3 * species.n_atoms - (5 if species.is_linear() else 6)
+
+    if species.graph is not None:
+        make_graph(species, allow_invalid_valancies=True)
+
+    pic, dof = get_pic_and_dof_from_species(species)
+    if dof > n_dof:
+        return pic
+
+    # removing bonds due to valency consideration may have cause problems
+    make_graph(species, allow_invalid_valancies=True)
+    pic, dof = get_pic_and_dof_from_species(species, True, True)
+    if dof > n_dof:
+        return pic
+    else:
+        raise RuntimeError("Failed to build redundant internal coordinates")
+
+
+def get_pic_and_dof_from_species(
     species: "Species",
-) -> AnyPIC:
+    aux_bonds: bool = False,
+    aux_interfrag: bool = False,
+) -> Tuple[AnyPIC, float]:
     # take a copy so that modifications do not affect original
     species = species.copy()
-    if species.graph is None:
-        raise RuntimeError(
-            "Unable to build coordinates, connectivity graph is missing"
-        )
+    assert species.graph is not None
     pic = AnyPIC()
-    _add_distances_from_species(pic, species, aux_bonds=True)
+    _handle_fragments_constraints(pic, species, aux_interfrag=aux_interfrag)
+    _add_distances_from_species(pic, species, aux_bonds=aux_bonds)
     _add_bends_from_species(pic, species)
     _add_dihedrals_from_species(pic, species)
-    return pic
+    x = CartesianCoordinates(species.coordinates)
+    _ = pic(x)
+    dof = np.linalg.matrix_rank(pic.B, tol=1e-6)
+    return pic, dof
 
 
 def _handle_fragments_constraints(
