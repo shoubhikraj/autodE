@@ -266,12 +266,15 @@ def build_pic_from_species(
     return pic
 
 
-def _join_fragments(pic, species: "Species", aux_interfrag=False) -> None:
+def _handle_fragments_constraints(
+    pic, species: "Species", aux_interfrag=False
+) -> None:
     """
-    In case the graph of the species has separated fragments
-    they must be connected in order to obtain redundant set
-    of primitives. The PIC instance and the graph of the species
-    may be modified in-place.
+    Update the "core" graph of the molecule, by adding the distance
+    constraints into the graph, and by joining the fragments.
+    Also adds auxiliary interfragment bonds, which are not part
+    of the "core" graph. The AnyPIC instance and the species are
+    modified in-place.
 
     Args:
         species (Species):
@@ -279,15 +282,16 @@ def _join_fragments(pic, species: "Species", aux_interfrag=False) -> None:
     # todo join fragments and constraints
     assert species.graph is not None
     frags = list(species.graph.connected_fragments())
+    # add constraints into core graph
     constraints = species.constraints.distance
     if constraints is None:
         constraints = DistanceConstraints()
-
     for (i, j) in constraints:
         species.graph.add_edge(i, j, pi=False, active=False)
+
+    # handle fragments
     if len(frags) == 1:
         return None
-
     for (frag1, frag2) in itertools.combinations(frags, r=2):
         distances = []
         atom_pairs = []
@@ -314,45 +318,14 @@ def _add_distances_from_species(
 ) -> None:
     """
     Add distances from a species using the graph of core bonds
-    provided. Optionally, add auxiliary bonds. The AnyPIC
-    instance is modified in-place.
+    provided. Optionally, add auxiliary extra-redundant bonds.
+    The AnyPIC instance is modified in-place.
 
     Args:
         pic (AnyPIC): An AnyPIC instance
         species (Species): The species
-        aux_bonds (bool): Whether to add auxiliary bonds or not
+        aux_bonds (bool): Whether to add auxiliary bonds
     """
-    # interfragment bonds and constraints should be in "core" graph
-    assert species.graph is not None
-    constraints = species.constraints.distance
-    if constraints is None:
-        constraints = DistanceConstraints()
-
-    for (i, j) in constraints:
-        species.graph.add_edge(i, j, pi=False, active=False)
-
-    frags = list(species.graph.connected_fragments())
-    if len(frags) != 1:
-        for (frag1, frag2) in itertools.combinations(frags, r=2):
-            distances = []
-            atom_pairs = []
-            for (i, j) in itertools.product(frag1, frag2):
-                atom_pairs.append((i, j))
-                distances.append(species.distance(i, j))
-            # min interfragment distance is a core bond
-            min_pair = atom_pairs[np.argmin(distances)]
-            species.graph.add_edge(*min_pair, pi=False, active=False)
-
-            if aux_bonds:
-                # add auxiliary interfragment bonds
-                min_dist = min(distances)
-                for idx, (i, j) in enumerate(atom_pairs):
-                    if (
-                        distances[idx] < 1.3 * min_dist
-                        or distances[idx] < Distance(2.0, "ang")
-                    ) and species.graph.has_edge(i, j):
-                        pic.append(PrimitiveDistance(i, j))
-
     # now we iterate over the "core" bonds
     core_graph = species.graph
     assert core_graph is not None
@@ -366,7 +339,6 @@ def _add_distances_from_species(
             pic.append(ConstrainedPrimitiveDistance(i, j, r))
         else:
             pic.append(PrimitiveDistance(i, j))
-
     assert len(constraints) == pic.n_constrained
 
     if not aux_bonds:
@@ -376,6 +348,9 @@ def _add_distances_from_species(
     for (i, j) in itertools.combinations(range(species.n_atoms), r=2):
         if core_graph.has_edge(i, j):
             continue
+        # avoid adding the same distance twice
+        if PrimitiveDistance(i, j) in pic:
+            continue
         if species.distance(i, j) < 2.5 * species.eqm_bond_distance(i, j):
             pic.append(PrimitiveDistance(i, j))
     return None
@@ -384,8 +359,7 @@ def _add_distances_from_species(
 def _add_bends_from_species(pic, species) -> None:
     """
     Add all bond angle (i.e. valence angles) from a species and
-    its graph, avoiding angles that are close to 180 degrees. The
-    AnyPIC instance is modified in-place.
+    its "core" graph. The AnyPIC instance is modified in-place.
 
     Args:
         pic (AnyPIC): An AnyPIC instance
@@ -394,9 +368,8 @@ def _add_bends_from_species(pic, species) -> None:
     core_graph = species.graph
     for o in range(species.n_atoms):
         for (n, m) in itertools.combinations(core_graph.neighbors(o), r=2):
-            if species.angle(m, o, n) < Angle(175, "deg"):
-                pic.append(PrimitiveBondAngle(o=o, m=m, n=n))
-            # TODO: implement linear bends
+            pic.append(PrimitiveBondAngle(o=o, m=m, n=n))
+            # TODO: implement linear angles
     return None
 
 
