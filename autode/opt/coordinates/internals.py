@@ -372,7 +372,7 @@ def _add_distances_from_species(
     for (i, j) in itertools.combinations(range(species.n_atoms), r=2):
         if core_graph.has_edge(i, j):
             continue
-        # avoid adding the same distance twice
+        # avoid adding if already covered by auxiliary interfragment
         if PrimitiveDistance(i, j) in pic:
             continue
         if species.distance(i, j) < 2.5 * species.eqm_bond_distance(i, j):
