@@ -286,7 +286,8 @@ def get_pic_and_dof_from_species(
     _add_dihedrals_from_species(pic, species)
     x = CartesianCoordinates(species.coordinates)
     _ = pic(x)
-    dof = np.linalg.matrix_rank(pic.B, tol=1e-6)
+    # Threshold 1e-7 suggested by Pulay and Fogarasi
+    dof = np.linalg.matrix_rank(pic.B, tol=1e-7)
     return pic, dof
 
 
@@ -305,6 +306,7 @@ def _handle_fragments_constraints(
     """
     # todo join fragments and constraints
     assert species.graph is not None
+    # get the fragments before adding constraints
     frags = list(species.graph.connected_fragments())
     # add constraints into core graph
     constraints = species.constraints.distance
