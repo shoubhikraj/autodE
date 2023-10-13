@@ -438,5 +438,6 @@ def _add_dihedrals_from_species(pic, species) -> None:
                     continue
                 else:
                     pic.append(PrimitiveDihedralAngle(m, o, p, n))
+    # TODO: dihedrals for linear series of atoms
 
     return None
