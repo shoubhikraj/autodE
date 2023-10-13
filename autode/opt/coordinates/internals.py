@@ -26,8 +26,8 @@ from autode.opt.coordinates.primitives import (
 )
 
 if TYPE_CHECKING:
+    from autode.opt.coordinates import CartesianCoordinates
     from autode.species import Species
-    from autode.opt.coordinates.cartesian import CartesianCoordinates
     from autode.opt.coordinates.primitives import (
         ConstrainedPrimitive,
         _DistanceFunction,
@@ -252,6 +252,7 @@ class AnyPIC(PIC):
 
 
 def build_redundant_pic_from_species(species):
+    # take a copy so that modifications do not affect original
     species = species.copy()
     n_dof = 3 * species.n_atoms - (5 if species.is_linear() else 6)
 
@@ -259,13 +260,13 @@ def build_redundant_pic_from_species(species):
         make_graph(species, allow_invalid_valancies=True)
 
     pic, dof = get_pic_and_dof_from_species(species)
-    if dof > n_dof:
+    if dof >= n_dof:
         return pic
 
     # removing bonds due to valency consideration may have cause problems
     make_graph(species, allow_invalid_valancies=True)
     pic, dof = get_pic_and_dof_from_species(species, True, True)
-    if dof > n_dof:
+    if dof >= n_dof:
         return pic
     else:
         raise RuntimeError("Failed to build redundant internal coordinates")
@@ -276,8 +277,9 @@ def get_pic_and_dof_from_species(
     aux_bonds: bool = False,
     aux_interfrag: bool = False,
 ) -> Tuple[AnyPIC, float]:
-    # take a copy so that modifications do not affect original
-    species = species.copy()
+    # avoid circular imports
+    from autode.opt.coordinates.cartesian import CartesianCoordinates
+
     assert species.graph is not None
     pic = AnyPIC()
     _handle_fragments_constraints(pic, species, aux_interfrag=aux_interfrag)
@@ -321,7 +323,7 @@ def _handle_fragments_constraints(
     for (frag1, frag2) in itertools.combinations(frags, r=2):
         distances = []
         atom_pairs = []
-        for (i, j) in itertools.product(frag1, frag2):
+        for (i, j) in itertools.product(list(frag1), list(frag2)):
             atom_pairs.append((i, j))
             distances.append(species.distance(i, j))
         # min interfragment distances is a "core" bond

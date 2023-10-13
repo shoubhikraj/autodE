@@ -151,6 +151,8 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
         Returns:
             (DIC): Delocalised internal coordinates
         """
+        from autode.opt.coordinates import CartesianCoordinates
+
         primitives = build_redundant_pic_from_species(species=species)
         x = CartesianCoordinates(species.coordinates)
         return cls.from_cartesian(x, primitives=primitives)
