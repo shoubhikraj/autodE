@@ -251,46 +251,21 @@ class AnyPIC(PIC):
         raise RuntimeError("Cannot populate all on an AnyPIC instance")
 
 
-def build_redundant_pic_from_species(species):
-    # take a copy so that modifications do not affect original
-    species = species.copy()
-    n_dof = 3 * species.n_atoms - (5 if species.is_linear() else 6)
-
-    if species.graph is not None:
-        make_graph(species, allow_invalid_valancies=True)
-
-    pic, dof = get_pic_and_dof_from_species(species)
-    if dof >= n_dof:
-        return pic
-
-    # removing bonds due to valency consideration may have cause problems
-    make_graph(species, allow_invalid_valancies=True)
-    pic, dof = get_pic_and_dof_from_species(species, True, True)
-    if dof >= n_dof:
-        return pic
-    else:
-        raise RuntimeError("Failed to build redundant internal coordinates")
-
-
-def get_pic_and_dof_from_species(
+def get_pic_from_species(
     species: "Species",
     aux_bonds: bool = False,
     aux_interfrag: bool = False,
-) -> Tuple[AnyPIC, float]:
-    # avoid circular imports
-    from autode.opt.coordinates.cartesian import CartesianCoordinates
+) -> AnyPIC:
 
-    assert species.graph is not None
+    if species.graph is None:
+        make_graph(species, allow_invalid_valancies=True)
     pic = AnyPIC()
     _handle_fragments_constraints(pic, species, aux_interfrag=aux_interfrag)
     _add_distances_from_species(pic, species, aux_bonds=aux_bonds)
     _add_bends_from_species(pic, species)
     _add_dihedrals_from_species(pic, species)
-    x = CartesianCoordinates(species.coordinates)
-    _ = pic(x)
-    # Threshold 1e-7 suggested by Pulay and Fogarasi
-    dof = np.linalg.matrix_rank(pic.B, tol=1e-7)
-    return pic, dof
+    # TODO: check for redundancy by checking the matrix rank
+    return pic
 
 
 def _handle_fragments_constraints(
@@ -438,6 +413,5 @@ def _add_dihedrals_from_species(pic, species) -> None:
                     continue
                 else:
                     pic.append(PrimitiveDihedralAngle(m, o, p, n))
-    # TODO: dihedrals for linear series of atoms
-
+    # TODO: add dihedrals from linear series of atoms
     return None

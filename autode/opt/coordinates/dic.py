@@ -25,7 +25,7 @@ from autode.opt.coordinates.internals import (
     PIC,
     PrimitiveInverseDistances,
     InternalCoordinates,
-    build_redundant_pic_from_species,
+    get_pic_from_species,
 )
 from autode.exceptions import CoordinateTransformFailed
 
@@ -153,7 +153,7 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
         """
         from autode.opt.coordinates import CartesianCoordinates
 
-        primitives = build_redundant_pic_from_species(species=species)
+        primitives = get_pic_from_species(species=species)
         x = CartesianCoordinates(species.coordinates)
         return cls.from_cartesian(x, primitives=primitives)
 
