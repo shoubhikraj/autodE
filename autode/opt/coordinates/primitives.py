@@ -194,6 +194,44 @@ class PrimitiveDistance(_DistanceFunction):
 
         return val if i == self.i else -val
 
+    def second_derivative(
+        self,
+        i: int,
+        comp_i: "CartesianComponent",
+        j: int,
+        comp_j: "CartesianComponent",
+        x: "CartesianCoordinates",
+    ):
+        """
+        Second derivative against cartesian displacement
+
+        Args:
+            i:
+            comp_i:
+            j:
+            comp_j:
+            x:
+
+        Returns:
+            (float):
+        """
+        if i != self.i or i != self.j:
+            return 0.0
+
+        if j != self.i or j != self.j:
+            return 0.0
+
+        _x = x.reshape((-1, 3))
+        length = self(x)
+        u = (_x[self.i] - _x[self.j]) / length
+
+        pre_fac = -1 if i == j else 1
+        k_i = int(comp_i)
+        k_j = int(comp_j)
+        post_fac = 1 if k_i == k_j else 0
+
+        return pre_fac * (u[k_i] * u[k_j] - post_fac) / length
+
     def __call__(self, x: "CartesianCoordinates") -> float:
         """|x_i - x_j|"""
         _x = x.reshape((-1, 3))
