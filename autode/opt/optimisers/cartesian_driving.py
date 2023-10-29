@@ -63,3 +63,4 @@ class DrivenDistances:
                                     i, comp_i, j, comp_j, _x
                                 )
                             )
+        return C
