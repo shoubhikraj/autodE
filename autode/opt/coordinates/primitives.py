@@ -215,10 +215,7 @@ class PrimitiveDistance(_DistanceFunction):
         Returns:
             (float):
         """
-        if i != self.i or i != self.j:
-            return 0.0
-
-        if j != self.i or j != self.j:
+        if (i, j) != (self.i, self.j) and (i, j) != (self.j, self.i):
             return 0.0
 
         _x = x.reshape((-1, 3))
