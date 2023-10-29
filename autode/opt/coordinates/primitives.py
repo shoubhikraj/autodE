@@ -219,7 +219,7 @@ class PrimitiveDistance(_DistanceFunction):
             return 0.0
 
         _x = x.reshape((-1, 3))
-        length = self(x)
+        length = self(_x)
         u = (_x[self.i] - _x[self.j]) / length
 
         pre_fac = -1 if i == j else 1

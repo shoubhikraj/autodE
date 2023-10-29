@@ -5,6 +5,7 @@ import numpy as np
 
 from autode.opt.coordinates.primitives import PrimitiveDistance
 from autode.opt.coordinates import CartesianComponent
+from autode.opt.optimisers import RFOptimiser
 
 
 class DrivenDistances:
@@ -64,3 +65,26 @@ class DrivenDistances:
                                 )
                             )
         return C
+
+
+class CartesianDrivingOptimiser(RFOptimiser):
+    def __init__(
+        self,
+        maxiter,
+        gtol,
+        etol,
+        driving_coords,
+        drive_step=0.2,
+        trust_radius=0.08,
+    ):
+        super().__init__(maxiter, gtol, etol, init_alpha=trust_radius)
+
+        self._drive_step = drive_step
+        self._lambda = 0.0  # Lagrangian multiplier
+        self._target_dist = None
+
+    def _get_lagrangian_gradient(self):
+        pass
+
+    def _get_lagrangian_hessian(self):
+        pass
