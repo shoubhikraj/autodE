@@ -108,9 +108,13 @@ class CartesianDrivingOptimiser(RFOptimiser):
         current_dist = self._driven_coords(self._coords)
         self._target_dist = current_dist - self._drive_step
 
-    def _get_lagrangian_gradient(self):
+    def _get_constrained_gradient(self):
         A = self._driven_coords.derivative(self._coords)
         g_con = self._coords.g - self._lambda * A
+        return g_con
+
+    def _get_lagrangian_gradient(self):
+        g_con = self._get_constrained_gradient()
         c_x = self._driven_coords(self._coords) - self._target_dist
         return np.append(g_con, [-c_x])
 
@@ -126,3 +130,8 @@ class CartesianDrivingOptimiser(RFOptimiser):
         del2_L[:h_n, -1] = -A
 
         return del2_L
+
+    def _step(self) -> None:
+        """Take an RFO step"""
+        b, u = np.linalg.eigh(self._get_lagrangian_hessian())
+        f = u.T.dot(self._get_constrained_gradient())
