@@ -15,7 +15,7 @@ class DrivenDistances:
 
     def __init__(self, bonds, coefficients):
         self._check_bonds(bonds)
-        assert all(isinstance(coeff, float) for coeff in coefficients)
+        assert all(isinstance(coeff, (float, int)) for coeff in coefficients)
         self._coeffs = list(coefficients)
         self._prims = []
         for bond in bonds:
@@ -97,6 +97,10 @@ class CartesianDrivingOptimiser(RFOptimiser):
         self._lambda = 0.0  # Lagrangian multiplier
         self._target_dist = None
 
+    @property
+    def _g_norm(self):
+        return np.sqrt(np.average(np.square(self._get_constrained_gradient())))
+
     def _initialise_run(self) -> None:
         """Initialise the run by generating self._coords"""
         assert self._species is not None
@@ -124,7 +128,7 @@ class CartesianDrivingOptimiser(RFOptimiser):
         )
         A = self._driven_coords.derivative(self._coords)
         h_n = self._coords.h.shape[0]
-        del2_L = np.zeros(h_n + 1, h_n + 1)
+        del2_L = np.zeros(shape=(h_n + 1, h_n + 1))
         del2_L[:h_n, :h_n] = W
         del2_L[-1, :h_n] = -A
         del2_L[:h_n, -1] = -A
@@ -133,20 +137,25 @@ class CartesianDrivingOptimiser(RFOptimiser):
 
     def _step(self) -> None:
         """Take an RFO step"""
+        assert self._coords is not None
+        self._coords.h = self._updated_h()
+
         # get delta2 L and symmetrize
         h = self._get_lagrangian_hessian()
         h = (h + h.T) / 2
         b, u = np.linalg.eigh(h)
-        f = u.T.dot(self._get_constrained_gradient())
+        f = u.T.dot(self._get_lagrangian_gradient())
 
         # choose the constraint mode from the lagrangian eigenvalues
         constr_idx = np.argmax(u[-1])
 
-        # build the paritioned rfo equations
-        h_n, _ = u.shape
+        # build the paritioned rfo step
+        h_n, _ = h.shape
+        step = np.zeros(shape=h_n)
 
-        min_b = np.delete(b, constr_idx, axis=1)
+        min_b = np.delete(b, constr_idx)
         min_f = np.delete(f, constr_idx)
+        min_u = np.delete(u, constr_idx, axis=1)
         min_aug_h = np.zeros((h_n, h_n))
         min_aug_h[: h_n - 1, : h_n - 1] = np.diag(min_b)
         min_aug_h[-1, : h_n - 1] = min_f
@@ -154,10 +163,24 @@ class CartesianDrivingOptimiser(RFOptimiser):
         lmda_ns = np.linalg.eigvalsh(min_aug_h)
         lmda_n = lmda_ns[np.where(np.abs(lmda_ns) > 1e-15)[0][0]]
 
+        for i in range(len(min_f)):
+            step += min_f[i] * min_u[:, i] / (min_b[i] - lmda_n)
+
         max_b = b[constr_idx]
         max_f = b[constr_idx]
+        max_u = u[:, constr_idx]
         max_aug_h = np.zeros((2, 2))
         max_aug_h[0, 0] = max_b
         max_aug_h[-1, 0] = max_f
         max_aug_h[0, -1] = max_f
         lmda_p = np.linalg.eigvalsh(max_aug_h)[-1]
+        step += max_f * max_u / (max_b - lmda_p)
+
+        # take step within trust radius
+        max_step = np.max(step[:-1])
+        if max_step > self.alpha:
+            step = step * self.alpha / max_step
+
+        self._coords = self._coords + step[:-1]
+        self._lambda = step[-1]
+        return None
