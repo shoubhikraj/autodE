@@ -133,15 +133,14 @@ class CartesianDrivingOptimiser(RFOptimiser):
 
     def _step(self) -> None:
         """Take an RFO step"""
-        b, u = np.linalg.eigh(self._get_lagrangian_hessian())
+        # get delta2 L and symmetrize
+        h = self._get_lagrangian_hessian()
+        h = (h + h.T) / 2
+        b, u = np.linalg.eigh(h)
         f = u.T.dot(self._get_constrained_gradient())
 
         # choose the constraint mode from the lagrangian eigenvalues
-        components = []
-        for idx in range(u.shape[1]):
-            constr_component = u[:, idx][-1]
-            components.append(constr_component)
-        constr_idx = np.argmax(components)
+        constr_idx = np.argmax(u[-1])
 
         # build the paritioned rfo equations
         h_n, _ = u.shape
