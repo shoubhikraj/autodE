@@ -106,7 +106,7 @@ class CartesianDrivingOptimiser(RFOptimiser):
         self._update_gradient_and_energy()
 
         current_dist = self._driven_coords(self._coords)
-        self._target_dist = current_dist - self._drive_step
+        self._target_dist = current_dist + self._drive_step
 
     def _get_constrained_gradient(self):
         A = self._driven_coords.derivative(self._coords)
