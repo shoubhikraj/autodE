@@ -173,7 +173,7 @@ class CartesianDrivingOptimiser(RFOptimiser):
         max_aug_h[0, 0] = max_b
         max_aug_h[-1, 0] = max_f
         max_aug_h[0, -1] = max_f
-        lmda_p = np.linalg.eigvalsh(max_aug_h)[-1]
+        lmda_p = np.linalg.eigvalsh(max_aug_h).max()
         step += max_f * max_u / (max_b - lmda_p)
 
         # take step within trust radius
