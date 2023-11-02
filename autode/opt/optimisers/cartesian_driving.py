@@ -166,7 +166,7 @@ class CartesianDrivingOptimiser(RFOptimiser):
         lmda_n = lmda_ns[np.where(np.abs(lmda_ns) > 1e-15)[0][0]]
 
         for i in range(len(min_f)):
-            step += min_f[i] * min_u[:, i] / (min_b[i] - lmda_n)
+            step -= min_f[i] * min_u[:, i] / (min_b[i] - lmda_n)
 
         max_b = b[constr_idx]
         max_f = b[constr_idx]
@@ -176,7 +176,7 @@ class CartesianDrivingOptimiser(RFOptimiser):
         max_aug_h[-1, 0] = max_f
         max_aug_h[0, -1] = max_f
         lmda_p = np.linalg.eigvalsh(max_aug_h).max()
-        step += max_f * max_u / (max_b - lmda_p)
+        step -= max_f * max_u / (max_b - lmda_p)
 
         # take step within trust radius
         max_step = np.max(step[:-1])
