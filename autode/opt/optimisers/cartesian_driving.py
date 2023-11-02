@@ -6,6 +6,7 @@ import numpy as np
 from autode.opt.coordinates.primitives import PrimitiveDistance
 from autode.opt.coordinates import CartesianComponent, CartesianCoordinates
 from autode.opt.optimisers import RFOptimiser
+from autode.opt.optimisers.hessian_update import BFGSSR1Update
 
 
 class DrivenDistances:
@@ -96,6 +97,7 @@ class CartesianDrivingOptimiser(RFOptimiser):
         self._driven_coords = driving_coords
         self._lambda = 0.0  # Lagrangian multiplier
         self._target_dist = None
+        self._hessian_update_types = [BFGSSR1Update]
 
     @property
     def _g_norm(self):
