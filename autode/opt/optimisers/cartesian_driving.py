@@ -149,7 +149,7 @@ class CartesianDrivingOptimiser(RFOptimiser):
         f = u.T.dot(self._get_lagrangian_gradient())
 
         # choose the constraint mode from the lagrangian eigenvalues
-        constr_idx = np.argmax(u[-1])
+        constr_idx = np.argmax(np.abs(u[-1]))
 
         # build the paritioned rfo step
         h_n, _ = h.shape
