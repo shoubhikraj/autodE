@@ -179,7 +179,7 @@ class CartesianDrivingOptimiser(RFOptimiser):
         step -= max_f * max_u / (max_b - lmda_p)
 
         # take step within trust radius
-        max_step = np.max(step[:-1])
+        max_step = np.max(np.abs(step[:-1]))
         if max_step > self.alpha:
             step = step * self.alpha / max_step
 
