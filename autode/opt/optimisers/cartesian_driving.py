@@ -49,7 +49,7 @@ class DrivenDistances:
                     j, CartesianComponent.y, _x
                 )
                 B[3 * j + 2] += coeff * bond.derivative(
-                    j, CartesianComponent.y, _x
+                    j, CartesianComponent.z, _x
                 )
 
         return B
@@ -73,7 +73,9 @@ class DrivenDistances:
                 for j in range(n_atoms):
                     for comp_i in comps:
                         for comp_j in comps:
-                            C[3 * i + comp_i, 3 * j + comp_j] = coeff * (
+                            C[
+                                3 * i + int(comp_i), 3 * j + int(comp_j)
+                            ] = coeff * (
                                 bond.second_derivative(
                                     i, comp_i, j, comp_j, _x
                                 )
