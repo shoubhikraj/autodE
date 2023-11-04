@@ -20,3 +20,22 @@ def test_driving_coords_gradients():
     calc_grad = dists.derivative(x)
 
     assert np.allclose(num_grad, calc_grad, rtol=1e-3)
+
+
+def test_driving_coords_hessian():
+    dists = DrivenDistances([(1, 2)], [1.0])
+    mol = Molecule(smiles="CCO")
+    x = np.array(mol.coordinates.flatten())
+    delta = 0.001
+    num_hess = np.zeros(shape=(len(x), len(x)))
+
+    for idx in range(len(x)):
+        x_plus = x.copy()
+        x_plus[idx] += delta
+        num_hess[:, idx] = (
+            dists.derivative(x_plus) - dists.derivative(x)
+        ) / delta
+
+    calc_hess = dists.second_derivative(x)
+
+    assert np.allclose(num_hess, calc_hess, rtol=1e-3)
