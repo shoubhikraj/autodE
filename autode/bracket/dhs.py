@@ -209,11 +209,16 @@ class DistanceConstrainedOptimiser(RFOptimiser):
 
         try:
             step = self._get_lagrangian_step(coords, grad)
+            logger.info(
+                f"Taking a quasi-Newton step:" f" {np.linalg.norm(step):.3f} Å"
+            )
         except OptimiserStepError:
             step = self._get_sd_step(coords, grad)
-
-        step_size = np.linalg.norm(step)
-        logger.info(f"Taking a quasi-Newton step: {step_size:.3f} Å")
+            logger.warning(
+                f"Failed to take quasi-Newton step, "
+                f"taking steepest descent step instead: "
+                f"{np.linalg.norm(step):.3f} Å"
+            )
 
         # the step is on the interpolated coordinates (if done)
         actual_step = (coords + step) - self._coords
@@ -235,9 +240,10 @@ class DistanceConstrainedOptimiser(RFOptimiser):
         dist_hat = dist_vec / np.linalg.norm(dist_vec)
         perp_grad = grad - np.dot(grad, dist_hat) * dist_hat
         sd_step = -perp_grad
-        # ensure step is half of trust radius (should be small)
-        if np.linalg.norm(sd_step) < self.alpha / 2:
-            sd_step *= (self.alpha / 2) / np.linalg.norm(sd_step)
+        # step size should be half of the previous step size (small)
+        sd_size = np.linalg.norm(self._coords - self._history.penultimate) / 2
+        if np.linalg.norm(sd_step) < sd_size:
+            sd_step *= sd_size / np.linalg.norm(sd_step)
         # correct step as it does not maintain distance constraint
         new_coords = coords + sd_step
         new_vec = new_coords - self._pivot
