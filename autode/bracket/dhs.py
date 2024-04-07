@@ -240,8 +240,10 @@ class DistanceConstrainedOptimiser(RFOptimiser):
         dist_hat = dist_vec / np.linalg.norm(dist_vec)
         perp_grad = grad - np.dot(grad, dist_hat) * dist_hat
         sd_step = -perp_grad
-        # step size should be half of the previous step size (small)
-        sd_size = np.linalg.norm(self._coords - self._history.penultimate) / 2
+        # step size should be 3/4 of the previous step size (small)
+        sd_size = (
+            np.linalg.norm(self._coords - self._history.penultimate) * 0.75
+        )
         if np.linalg.norm(sd_step) < sd_size:
             sd_step *= sd_size / np.linalg.norm(sd_step)
         # correct step as it does not maintain distance constraint
