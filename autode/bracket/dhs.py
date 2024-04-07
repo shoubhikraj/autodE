@@ -244,7 +244,7 @@ class DistanceConstrainedOptimiser(RFOptimiser):
         sd_size = (
             np.linalg.norm(self._coords - self._history.penultimate) * 0.75
         )
-        if np.linalg.norm(sd_step) < sd_size:
+        if np.linalg.norm(sd_step) > sd_size:
             sd_step *= sd_size / np.linalg.norm(sd_step)
         # correct step as it does not maintain distance constraint
         new_coords = coords + sd_step
