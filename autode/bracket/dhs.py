@@ -8,6 +8,7 @@ Also implements DHS-GS, CI-DHS and CI-DHS-GS methods
 import numpy as np
 from typing import Tuple, Union, Optional, Any, TYPE_CHECKING
 from enum import Enum
+import pickle
 
 from autode.values import Distance, Angle, GradientRMS
 from autode.bracket.imagepair import EuclideanImagePair
@@ -587,7 +588,12 @@ class DHS(BaseBracketMethod):
         )
         tmp_spc = self._species.copy()
         tmp_spc.coordinates = new_coord
-        opt.run(tmp_spc, self._method)
+        try:
+            opt.run(tmp_spc, self._method)
+        except Exception as exc:
+            with open("dhs-opt-err.pkl", "wb") as fh:
+                pickle.dump(opt, fh, pickle.HIGHEST_PROTOCOL)
+            raise exc
         self._micro_iter = self._micro_iter + opt.iteration
 
         # not converged can only happen if exceeded maxiter of optimiser
