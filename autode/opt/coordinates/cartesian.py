@@ -20,8 +20,18 @@ class CartesianCoordinates(OptCoordinates):
     def __repr__(self):
         return f"Cartesian Coordinates({np.ndarray.__str__(self)} {self.units.name})"
 
-    def __new__(cls, input_array, units="Å") -> "CartesianCoordinates":
-        """New instance of these coordinates"""
+    def __new__(
+        cls, input_array, units="Å", remove_tr=False
+    ) -> "CartesianCoordinates":
+        """
+        New instance of these coordinates
+
+        Args:
+            input_array:
+            units:
+            remove_tr: Whether to remove the translational and rotational
+                       degrees of freedom from Hessian
+        """
 
         # if it has units cast into current units
         if isinstance(input_array, ValueArray):
@@ -30,7 +40,7 @@ class CartesianCoordinates(OptCoordinates):
         arr = super().__new__(
             cls, np.array(input_array).flatten(), units=units
         )
-        arr.remove_tr = False  # whether to remove trans. and rot. DOF
+        arr.remove_tr = bool(remove_tr)
         return arr
 
     def __array_finalize__(self, obj) -> None:
