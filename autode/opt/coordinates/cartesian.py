@@ -1,4 +1,5 @@
 import numpy as np
+import scipy
 from typing import Optional, TYPE_CHECKING
 
 from autode.log import logger
@@ -9,6 +10,8 @@ from autode.opt.coordinates.dic import DIC
 if TYPE_CHECKING:
     from autode.values import Gradient
     from autode.hessians import Hessian
+
+_tr_shift_fac = 100.0  # Shift factor for trans. rot. modes in Hessian
 
 
 class CartesianCoordinates(OptCoordinates):
@@ -24,17 +27,56 @@ class CartesianCoordinates(OptCoordinates):
         if isinstance(input_array, ValueArray):
             input_array = ValueArray.to(input_array, units=units)
 
-        return super().__new__(
+        arr = super().__new__(
             cls, np.array(input_array).flatten(), units=units
         )
+        arr.remove_tr = False  # whether to remove trans. and rot. DOF
+        return arr
 
     def __array_finalize__(self, obj) -> None:
         """See https://numpy.org/doc/stable/user/basics.subclassing.html"""
-        return None if obj is None else super().__array_finalize__(obj)
+        super().__array_finalize__(obj)
+        for attr in ["remove_tr"]:
+            setattr(self, attr, getattr(obj, attr, None))
+        return
 
     def _str_is_valid_unit(self, string) -> bool:
         """Is a string a valid unit for these coordinates e.g. nm"""
         return any(string in unit.aliases for unit in self.implemented_units)
+
+    def _get_tr_vecs(self) -> np.ndarray:
+        """
+        Obtain translation and rotation vectors and then orthonormalise
+        them, removing linear dependencies for linear molecules
+
+        Returns:
+            (np.ndarray): The orthonormal trans. and rot. vectors
+        """
+        # Ref.: Page, McIver, J. Chem. Phys., 1988, 88(2), 922
+        assert len(self) != 0 and len(self.shape) == 1
+        assert len(self) % 3 == 0
+        n_atoms = int(self.shape[0] / 3)
+        # Translation vectors
+        b_1 = np.tile([1.0, 0.0, 0.0], reps=n_atoms)
+        b_2 = np.tile([0.0, 1.0, 0.0], reps=n_atoms)
+        b_3 = np.tile([0.0, 0.0, 1.0], reps=n_atoms)
+        # Rotation vectors
+        b_4, b_5, b_6 = [np.zeros_like(b_1) for _ in range(3)]
+        for idx in range(n_atoms):
+            coord_x = self[3 * idx]
+            coord_y = self[3 * idx + 1]
+            coord_z = self[3 * idx + 2]
+            b_4[3 * idx : 3 * idx + 3] = [0.0, coord_z, -coord_y]
+            b_5[3 * idx : 3 * idx + 3] = [-coord_z, 0.0, coord_x]
+            b_6[3 * idx : 3 * idx + 3] = [coord_y, -coord_x, 0.0]
+        b = np.zeros(shape=(3 * n_atoms, 6))
+        for i, arr in enumerate([b_1, b_2, b_3, b_4, b_5, b_6]):
+            b[:, i] = arr
+
+        # get orthonormal basis from SVD, removes one mode if linear
+        v = scipy.linalg.orth(b, rcond=1.0e-5)
+        assert v.shape[1] in (5, 6)
+        return v
 
     def _update_g_from_cart_g(self, arr: Optional["Gradient"]) -> None:
         """
@@ -57,7 +99,19 @@ class CartesianCoordinates(OptCoordinates):
         Arguments:
             arr: Hessian matrix
         """
-        self.h = None if arr is None else np.array(arr)
+        if arr is None:
+            self.h = None
+            return
+
+        arr = np.array(arr)
+        if self.remove_tr:
+            tr_vecs = self._get_tr_vecs()
+            for idx in range(tr_vecs.shape[1]):
+                vec = tr_vecs[:, idx].flatten()
+                arr += _tr_shift_fac * np.outer(vec, vec)
+
+        self.h = arr
+        return None
 
     def iadd(self, value: np.ndarray) -> OptCoordinates:
         return np.ndarray.__iadd__(self, value)
