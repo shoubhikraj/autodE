@@ -2,7 +2,7 @@ import os
 import pickle
 
 import numpy as np
-
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from zipfile import ZipFile, is_zipfile
 from collections import deque
@@ -1136,3 +1136,63 @@ def print_geometries_from(
         tmp_spc.print_xyz_file(filename=filename, append=True)
 
     return None
+
+
+@dataclass
+class ConvergenceCriteria:
+    """Various convergence parameters of optimisers"""
+
+    abs_d_e: float
+    rms_g: float
+    max_g: float
+    rms_s: float
+    max_s: float
+
+
+class OptimiserConvergence:
+    """
+    Specify some common convergence criteria and also generate
+    convergence criteria from user-specified dictionaries
+    """
+
+    # NOTE: These are taken from ORCA
+    LOOSE = ConvergenceCriteria(
+        abs_d_e=3e-5, rms_g=5e-4, max_g=2e-3, rms_s=7e-3, max_s=1e-2
+    )
+    NORMAL = ConvergenceCriteria(
+        abs_d_e=5e-6, rms_g=1e-4, max_g=3e-4, rms_s=2e-3, max_s=4e-3
+    )
+    TIGHT = ConvergenceCriteria(
+        abs_d_e=1e-6, rms_g=3e-5, max_g=1e-4, rms_s=6e-4, max_s=1e-3
+    )
+    VERYTIGHT = ConvergenceCriteria(
+        abs_d_e=2e-7, rms_g=8e-6, max_g=3e-5, rms_s=1e-4, max_s=2e-4
+    )
+
+    @staticmethod
+    def criteria_from_dict(options: dict) -> ConvergenceCriteria:
+        """
+        Convert a user-supplied dictionary into valid convergence criteria
+        """
+        assert isinstance(options, dict)
+
+        possible_attrs = ["abs_d_e", "rms_g", "max_g", "rms_s", "max_s"]
+
+        valid_options = {}
+        for attr in possible_attrs:
+            valid_options[attr] = options.get(attr, None)
+
+        #  valid criteria must at least have RMS grad and delta E
+        if valid_options["abs_d_e"] is None or valid_options["rms_g"] is None:
+            raise ValueError(
+                "Convergence criteria must define at least the absolute"
+                "energy change tolerance (abs_d_e) and RMS gradient"
+                "tolerance (rms_g)"
+            )
+
+        # unset criteria are set to infinity i.e. not considered
+        for attr in possible_attrs:
+            if valid_options[attr] is None:
+                valid_options[attr] = float("inf")
+
+        return ConvergenceCriteria(**valid_options)
