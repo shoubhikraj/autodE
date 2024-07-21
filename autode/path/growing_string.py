@@ -6,9 +6,15 @@ different internal coordinate definitions.
 import numpy as np
 from typing import TYPE_CHECKING
 from autode.path import Path
-from autode.opt.coordinates.primitives import ConstrainedCompositeBonds
+from autode.opt.coordinates.cartesian import CartesianCoordinates
+from autode.opt.coordinates.primitives import (
+    ConstrainedCompositeBonds,
+    PrimitiveDistance,
+)
+from autode.opt.coordinates.internals import AnyPIC
 from autode.opt.optimisers.qa import QAOptimiser
 from autode.config import Config
+from autode.log import logger
 
 
 if TYPE_CHECKING:
@@ -45,8 +51,8 @@ class SEGSM(Path):
 
     def append(self, point):
         """
-        Add a new point to the path and take a step along the reaction
-        coordinate
+        Add a new point to the path, take a step along the reaction
+        coordinate, and optimise
 
         Args:
             point:
@@ -70,8 +76,56 @@ class SEGSM(Path):
 
         return super().append(point)
 
-    def generate(self):
-        """Generate a growing string path"""
+    def generate(self, name="gsm_path"):
+        """
+        Generate a growing string path from the starting point. Can be called
+        only once.
+
+        ---------------------------------------------------------------------
+
+        Args:
+            name (str): Prefix for plots and geometries
+        """
+        logger.info("Generating SE-GSM path from initial point")
+
+        def reached_final_point():
+            idx = self.product_idx(product=self.final_species)
+            if idx is not None:
+                return True
+
+        while not reached_final_point():
+            point = self[-1].new_species()
+            self.append(point)
+
+    def _get_gradients_across_ics(self, point):
+        """
+        Project the Cartesian gradient onto the redundant internal
+        coordinate space to obtain the gradients across bonds for
+        the point given
+
+        Returns:
+            (list[float]): Gradients along the bonds
+        """
+        assert point.gradient is not None, "Must have gradients!"
+        pic = AnyPIC.from_species(point)
+
+        # find indices of specified bonds in PIC
+        bond_positions = []
+        for bond in self.bonds:
+            i, j = bond.atom_indexes
+            ic = PrimitiveDistance(i, j)
+            if ic not in pic:
+                pic.add(ic)
+            bond_positions.append(pic.index(ic))
+
+        # project to redundant internals
+        x = CartesianCoordinates(point.coordinates)
+        g_x = np.array(point.gradient).flatten()
+        B = pic.get_B(x)
+        B_inv = np.linalg.pinv(B)
+        g_q = np.matmul(B_inv.T, g_x)
+
+        return list(g_q[bond_positions])
 
     def _get_driving_coordinate(self, point: "Species"):
         """
@@ -85,6 +139,7 @@ class SEGSM(Path):
         """
         bonds = []
         coeffs = []
+        msg = "Current driving coordinates: "
 
         for bond in self.bonds:
             i, j = bond.atom_indexes
@@ -97,7 +152,10 @@ class SEGSM(Path):
             if np.abs(c) > 1e-4:
                 bonds.append((i, j))
                 coeffs.append(c)
+                msg += f"{bond} * {c:.3f}"
 
+        coeffs = list(np.array(coeffs) / np.average(coeffs))
+        logger.info(msg)
         driven_coord = ConstrainedCompositeBonds(bonds, coeffs, value=0)
 
         # take a step along the coordinate
