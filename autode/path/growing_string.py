@@ -123,13 +123,14 @@ class SEGSM(Path):
         g_x = np.array(point.gradient).flatten()
         B = pic.get_B(x)
         B_inv = np.linalg.pinv(B)
-        g_q = np.matmul(B_inv.T, g_x)
+        g_q = np.matmul(B_inv.T, g_x).flatten()
 
         return list(g_q[bond_positions])
 
     def _get_driving_coordinate(self, point: "Species"):
         """
-        Obtain the GSM driving coordinate for a point
+        Obtain the GSM driving coordinate for a point. Should
+        have gradients defined.
 
         Args:
             point (Species):
@@ -141,8 +142,17 @@ class SEGSM(Path):
         coeffs = []
         msg = "Current driving coordinates: "
 
-        for bond in self.bonds:
+        g_q = self._get_gradients_across_ics(point)
+
+        for idx, bond in enumerate(self.bonds):
             i, j = bond.atom_indexes
+            d_curr = point.distance(i, j)
+            d0 = bond.final_dist
+
+            # The target value (bond.final_dist) is estimated from product
+            # and may not be correct for this GSM path. Check the gradient
+            # when close to convergence and stop driving if too low
+
             # enforce the sign
             c = np.sign(bond.dr) * np.abs(
                 point.distance(i, j) - bond.final_dist
