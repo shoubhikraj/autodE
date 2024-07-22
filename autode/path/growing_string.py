@@ -43,26 +43,32 @@ class SEGSM(Path):
         self.bonds = bonds
         self.final_species = final_species
         self.step_size = step_size
+        self.bond_grad_history = []
 
         # Add the first point after unconstrained minimization
         assert initial_species is not None
         point = initial_species.new_species(with_constraints=False)
+        self.add(point, unconstrained=True)
         # TODO: append point should be made aware of constraints
 
-    def append(self, point):
+    def add(self, point, unconstrained=False):
         """
         Add a new point to the path, take a step along the reaction
         coordinate, and optimise
 
         Args:
             point:
+            unconstrained:
 
         Returns:
 
         """
         idx = len(self) - 1
 
-        constr = self._get_driving_coordinate(point)
+        constr = None
+        if not unconstrained:
+            constr = self._get_driving_coordinate(point)
+
         opt = QAOptimiser(
             maxiter=50, gtol=5e-4, etol=1e-4, extra_prims=[constr]
         )
@@ -126,6 +132,30 @@ class SEGSM(Path):
         g_q = np.matmul(B_inv.T, g_x).flatten()
 
         return list(g_q[bond_positions])
+
+    def _have_bonds_crossed_barrier(self):
+        """
+        Detect whether the bonds have crossed the barrier so far
+        or not by checking the sign of the gradient
+
+        Returns:
+            (list[bool]):
+        """
+        from autode.bonds import FormingBond, BreakingBond
+
+        hist = zip(*self.bond_grad_history)
+
+        has_crossed = []
+        for idx, bond in enumerate(self.bonds):
+            grads = hist[idx]
+            for k in range(len(hist) - 2):
+                a, b, c = grads[k : k + 3]
+                if a < b < c and a < 0 < c:
+                    increasing = True
+                if a > b > c and a > 0 > c:
+                    decreasing = True
+
+            # forming bond sign -ve -> +ve
 
     def _get_driving_coordinate(self, point: "Species"):
         """
