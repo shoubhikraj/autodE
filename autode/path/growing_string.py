@@ -100,8 +100,8 @@ class SEGSM(Path):
                 return True
 
         while not reached_final_point():
-            point = self[-1].new_species()
-            self.append(point)
+            point = self[-1].copy()
+            self.add(point)
 
     def _get_gradients_across_ics(self, point):
         """
@@ -173,6 +173,7 @@ class SEGSM(Path):
         msg = "Current driving coordinates: "
 
         g_q = self._get_gradients_across_ics(point)
+        print(g_q)
 
         for idx, bond in enumerate(self.bonds):
             i, j = bond.atom_indexes
