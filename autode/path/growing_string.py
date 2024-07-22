@@ -170,10 +170,10 @@ class SEGSM(Path):
         """
         bonds = []
         coeffs = []
-        msg = "Current driving coordinates: "
 
         g_q = self._get_gradients_across_ics(point)
-        print(g_q)
+        # TODO remove print statement after debug
+        print("Gradients across current point", g_q)
 
         for idx, bond in enumerate(self.bonds):
             i, j = bond.atom_indexes
@@ -193,9 +193,11 @@ class SEGSM(Path):
             if np.abs(c) > 1e-4:
                 bonds.append((i, j))
                 coeffs.append(c)
-                msg += f"{bond} * {c:.3f}"
 
         coeffs = list(np.array(coeffs) / np.average(coeffs))
+        msg = "Current driving coordinates: "
+        for b, c in zip(bonds, coeffs):
+            msg += f"{c:+.3f} * {b}"
         logger.info(msg)
         driven_coord = ConstrainedCompositeBonds(bonds, coeffs, value=0)
 
