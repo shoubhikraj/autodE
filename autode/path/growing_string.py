@@ -25,7 +25,13 @@ if TYPE_CHECKING:
 
 class SEGSM(Path):
     def __init__(
-        self, bonds, method, initial_species, final_species, step_size=0.1
+        self,
+        bonds,
+        method,
+        initial_species,
+        final_species,
+        step_size=0.1,
+        maxiter=80,
     ):
         """
         SE-GSM path from initial to final species.
@@ -36,6 +42,8 @@ class SEGSM(Path):
             method:
             initial_species (Species):
             final_species:
+            step_size:
+            maxiter:
         """
         super().__init__()
 
@@ -43,6 +51,7 @@ class SEGSM(Path):
         self.bonds = bonds
         self.final_species = final_species
         self.step_size = step_size
+        self.maxiter = maxiter
         self.bond_grad_history = []
 
         # Add the first point after unconstrained minimization
@@ -67,11 +76,9 @@ class SEGSM(Path):
 
         constr = None
         if not unconstrained:
-            constr = self._get_driving_coordinate(point)
+            constr = [self._get_driving_coordinate(point)]
 
-        opt = QAOptimiser(
-            maxiter=50, gtol=5e-4, etol=1e-4, extra_prims=[constr]
-        )
+        opt = QAOptimiser(maxiter=50, gtol=5e-4, etol=1e-4, extra_prims=constr)
         opt.run(
             point,
             method=self.method,
@@ -102,6 +109,8 @@ class SEGSM(Path):
         while not reached_final_point():
             point = self[-1].copy()
             self.add(point)
+            if len(self) - 1 > self.maxiter:
+                break
 
     def _get_gradients_across_ics(self, point):
         """
@@ -194,10 +203,10 @@ class SEGSM(Path):
                 bonds.append((i, j))
                 coeffs.append(c)
 
-        coeffs = list(np.array(coeffs) / np.average(coeffs))
+        coeffs = list(np.array(coeffs) / np.linalg.norm(coeffs))
         msg = "Current driving coordinates: "
         for b, c in zip(bonds, coeffs):
-            msg += f"{c:+.3f} * {b}"
+            msg += f"{c:+.3f} * {b} "
         logger.info(msg)
         driven_coord = ConstrainedCompositeBonds(bonds, coeffs, value=0)
 
