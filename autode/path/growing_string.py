@@ -144,8 +144,9 @@ class SEGSM(Path):
 
     def _have_bonds_crossed_barrier(self):
         """
-        Detect whether the bonds have crossed the barrier so far
-        or not by checking the sign of the gradient
+        Detect whether the bonds have crossed at least one
+        barrier so far or not by checking the sign of the gradient
+        across that bond
 
         Returns:
             (list[bool]):
@@ -157,6 +158,8 @@ class SEGSM(Path):
         has_crossed = []
         for idx, bond in enumerate(self.bonds):
             grads = hist[idx]
+            increasing = decreasing = False
+            # check for monotonic decrease/increase
             for k in range(len(hist) - 2):
                 a, b, c = grads[k : k + 3]
                 if a < b < c and a < 0 < c:
@@ -165,6 +168,15 @@ class SEGSM(Path):
                     decreasing = True
 
             # forming bond sign -ve -> +ve
+            if isinstance(bond, FormingBond):
+                has_crossed.append(increasing)
+            # breaking bond sign +ve -> -ve
+            elif isinstance(bond, BreakingBond):
+                has_crossed.append(decreasing)
+            else:
+                raise ValueError("Has to be forming or breaking!")
+
+        return has_crossed
 
     def _get_driving_coordinate(self, point: "Species"):
         """
