@@ -27,7 +27,7 @@ class LBFGSOptimiser(NDOptimiser):
         self,
         *args,
         max_vecs: int = 20,
-        init_trust: float = 0.1,
+        init_trust: float = 0.2,
         **kwargs,
     ):
         """Initialise an L-BFGS optimiser"""
@@ -38,6 +38,7 @@ class LBFGSOptimiser(NDOptimiser):
         # storage for steps and gradient changes
         self._s: Deque[np.ndarray] = deque(maxlen=max_vecs)
         self._y: Deque[np.ndarray] = deque(maxlen=max_vecs)
+        self._first_step = True
 
     def _initialise_run(self) -> None:
         """Initialise the LBFGS run"""
@@ -64,7 +65,6 @@ class LBFGSOptimiser(NDOptimiser):
         y_s = np.dot(y, s)
         y_y = np.dot(y, y)
         # TODO: handle negative y_s and near zero y_s, y_y
-        self._rho.append(1.0 / y_s)
         # update the inverse Hessian diagonal
         gamma = y_s / y_y
         self._h_inv_d = np.ones_like(self._h_inv_d) * gamma
@@ -77,16 +77,19 @@ class LBFGSOptimiser(NDOptimiser):
         self._update_lbfgs_storage()
 
         # First step or after reset
-        if len(self._s) == 0:
+        if self._first_step:
             step = -self._coords.g
             # take step within trust radius
             self._first_step = False
+            if np.linalg.norm(step) > 0.05:
+                step *= 0.05 / np.linalg.norm(step)
+                self._coords = self._coords + step
             return None
 
         def lbfgs_step_err(mu):
             """dx - trust radius"""
             dx = self._get_lbfgs_step(self._coords.g, self._s, self._y, mu)
-            return dx - self._trust
+            return np.linalg.norm(dx) - self._trust
 
         step = self._get_lbfgs_step(self._coords.g, self._s, self._y, 0.0)
         if np.linalg.norm(step) <= self._trust:
@@ -96,7 +99,7 @@ class LBFGSOptimiser(NDOptimiser):
         # μ has to be found in range (0, inf)
         left_bound = right_bound = None
         mu = 1.0
-        for _ in range(10):
+        for _ in range(20):
             if lbfgs_step_err(mu) < 0:
                 right_bound = mu
             if lbfgs_step_err(mu) > 0:
@@ -107,10 +110,13 @@ class LBFGSOptimiser(NDOptimiser):
                 mu *= 0.5
 
         res = root_scalar(
-            lbfgs_step_err, bracket=[left_bound, right_bound], maxiter=1
+            lbfgs_step_err, bracket=[left_bound, right_bound], maxiter=10
         )
         if not res.converged:
-            pass
+            raise Exception
+
+        step = self._get_lbfgs_step(self._coords.g, self._s, self._y, res.root)
+        self._coords = self._coords + step
 
     @staticmethod
     def _get_lbfgs_step(
@@ -160,8 +166,9 @@ class LBFGSOptimiser(NDOptimiser):
             q -= alpha[i] * y_hat
 
         # regularised inverse diagonal
-        h_inv_d = np.ones(shape=n_vecs) * gamma
+        h_inv_d = np.ones_like(q) * float(gamma)
         h_inv_d = 1 / ((1 / h_inv_d) + mu)
+
         q *= h_inv_d
 
         for i in iter_range:
