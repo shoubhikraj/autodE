@@ -2,7 +2,7 @@
 Base classes of second-order (quadratic) optimisers
 """
 from abc import ABC, abstractmethod
-from typing import Optional, List, Type
+from typing import Optional, List, Type, TYPE_CHECKING
 from enum import Enum
 import numpy as np
 
@@ -10,6 +10,12 @@ from autode.values import Distance
 from autode.opt.optimisers.base import NDOptimiser
 from autode.opt.coordinates.base import OptCoordinates
 from autode.log import logger
+from autode.config import Config
+from autode.exceptions import CoordinateTransformFailed
+
+if TYPE_CHECKING:
+    from autode.species.species import Species
+    from autode.wrappers.methods import Method
 
 
 MAX_TRUST = 0.2
@@ -96,7 +102,7 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         self,
         maxiter: int,
         conv_tol,
-        init_hess: str,
+        init_hess: InitialHessian,
         recalc_hess_every,
         init_trust: float,
         trust_update: bool,
@@ -119,16 +125,61 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         self._maxmove = Distance(max_move, units="ang")
         assert self._maxmove > 0, "Max movement has to be positive!"
         self._extra_prims = extra_prims
+        self._last_pred_de = 0.0
         # TODO: remove hessian_update_types from NDOPtimiser
+
+    def _step(self) -> None:
+        """
+        Take a quadratic step, ensuring the trust radius is updated and
+        the coordinate system rebuilt if needed
+        """
+        self._update_trust_radius()
+        step = self._get_quadratic_step()
+        try:
+            self._take_step_within_max_move(step)
+        except CoordinateTransformFailed as exc:
+            logger.warning(
+                f"Coordinate failure: {str(exc)}, rebuilding coordinate"
+                f" system and trying again..."
+            )
+            self._build_coordinates()
+            try:
+                step = self._get_quadratic_step()
+                self._take_step_within_max_move(step)
+            except CoordinateTransformFailed:
+                raise RuntimeError(
+                    "Repeated failure in coordinate system, unable to recover"
+                )
+
+        last_coords = self._history.penultimate
+        self._last_pred_de = last_coords.pred_quad_delta_e(self._coords)
+        return None
+
+    @abstractmethod
+    def _take_step_within_max_move(self, delta_s):
+        """"""
+
+    @abstractmethod
+    def _get_quadratic_step(self) -> np.ndarray:
+        """Obtain the quadratic step"""
+
+    def _update_trust_radius(self):
+        """Update the trust radius"""
 
     @abstractmethod
     def _build_coordinates(self):
-        """Build the coordinates for this optimiser from the species"""
+        """(Re-)build the coordinates for this optimiser from the species"""
 
     def _initialise_run(self) -> None:
         """Initialise optimisation"""
         logger.info("Initialising optimisation")
         self._build_coordinates()
+
+        # handle initial Hessian
+        if self._init_hess.strategy == _InitHessStrategy.CALC:
+            self._update_hessian_gradient_and_energy()
+
         self._update_gradient_and_energy()
+
         if self._init_hess == _InitHessStrategy.READ:
             self._coords.update_h_from_cart_h(self._init_hess.cart_arr)
