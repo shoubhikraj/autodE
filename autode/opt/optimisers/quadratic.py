@@ -9,101 +9,36 @@ import numpy as np
 from autode.values import Distance
 from autode.opt.optimisers.base import NDOptimiser
 from autode.opt.coordinates.base import OptCoordinates
+from autode.opt.coordinates import CartesianCoordinates
+from autode.opt.coordinates.internals import AnyPIC
+from autode.opt.coordinates.dic import DICWithConstraints
 from autode.log import logger
 from autode.config import Config
+from autode.utils import work_in_tmp_dir
 from autode.exceptions import CoordinateTransformFailed
 
 if TYPE_CHECKING:
     from autode.species.species import Species
     from autode.wrappers.methods import Method
+    from autode.hessians import Hessian
 
 
 MAX_TRUST = 0.2
 MIN_TRUST = 0.01
 
 
-class _InitHessStrategy(Enum):
-    CALC = 1
-    READ = 2
-    UPDATE = 3
-    LL_GUESS = 4
-
-
-class InitialHessian:
-    """This class defines various ways of obtaining the initial Hessian"""
-
-    def __init__(self, strategy: _InitHessStrategy):
-        """Different ways of obtaining the initial Hessian"""
-        self.strategy = strategy
-        self.to_calc = None
-        self.cart_arr = None
-        self.old_coords = None
-        self.ll_guess = None
-
-    @classmethod
-    def from_cart_h(cls, arr):
-        """
-        Use a Cartesian hessian to initialise the optimisation
-
-        Args:
-            arr: The Hessian array
-
-        Returns:
-            (InitialHessian):
-        """
-        assert isinstance(arr, np.ndarray)
-        inhess = cls(strategy=_InitHessStrategy.READ)
-        inhess.cart_arr = arr
-        return inhess
-
-    @classmethod
-    def from_old_coords(cls, coords):
-        """
-        Obtain updated Hessian from an old set of coordinates
-
-        Args:
-            coords: Old set of coordinates
-
-        Returns:
-            (InitialHessian):
-        """
-        assert isinstance(coords, OptCoordinates)
-        inhess = cls(strategy=_InitHessStrategy.UPDATE)
-        inhess.old_coords = coords
-        return inhess
-
-    @classmethod
-    def from_ll_guess(cls):
-        """
-        Obtain Hessian from low-level guess
-
-        Returns:
-            (InitalHessian):
-        """
-        inhess = cls(strategy=_InitHessStrategy.LL_GUESS)
-        return inhess
-
-    @classmethod
-    def from_calc(cls):
-        """
-        Obtain Hessian from calculation
-
-        Returns:
-            (InitialHessian):
-        """
-        inhess = cls(strategy=_InitHessStrategy.CALC)
-        return inhess
-
-
 class QuadraticOptimiserBase(NDOptimiser, ABC):
-    """Base class for Hessian based optimisers that use trust radius"""
+    """
+    Base class for Hessian based optimisers in internal coordinates
+    that use trust radius
+    """
 
     def __init__(
         self,
         maxiter: int,
         conv_tol,
-        init_hess: InitialHessian,
-        recalc_hess_every,
+        calc_hess: bool,
+        recalc_hess_every: int,
         init_trust: float,
         trust_update: bool,
         max_move,
@@ -113,7 +48,7 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         """ """
         super().__init__(maxiter=maxiter, conv_tol=conv_tol, **kwargs)
 
-        self._init_hess = init_hess
+        self._calc_hess = calc_hess
         self._recalc_hess_every = recalc_hess_every
         self._trust = float(init_trust)
         if not MIN_TRUST < self._trust < MAX_TRUST:
@@ -155,31 +90,87 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         self._last_pred_de = last_coords.pred_quad_delta_e(self._coords)
         return None
 
-    @abstractmethod
     def _take_step_within_max_move(self, delta_s):
-        """"""
+        """
+        Take the optimiser step ensuring that the maximum movement
+        of any atom in Cartesian space does not exceed the max_move
+        threshold
+
+        Args:
+            delta_s: Step in current coordinate system
+        """
+        assert self._coords is not None
+
+        self._coords.allow_unconverged_back_transform = True
+        new_coords = self._coords + delta_s
+        cart_delta = new_coords.to("cart") - self._coords.to("cart")
+        cart_displ = np.linalg.norm(cart_delta.reshape((-1, 3)), axis=1)
+        max_displ = np.abs(cart_displ).max()
+        self._coords.allow_unconverged_back_transform = False
+
+        if max_displ > self._maxmove:
+            logger.info(
+                f"Calculated step too large: max. displacement = "
+                f"{max_displ:.3f} Å, scaling down"
+            )
+            # Note because the transformation is not linear this will not
+            # generate a step exactly max(∆x) ≡ α, but is empirically close
+            factor = self._maxmove / max_displ
+            self._coords = self._coords + (factor * delta_s)
+        else:
+            self._coords = self._coords + delta_s
+
+        return None
 
     @abstractmethod
     def _get_quadratic_step(self) -> np.ndarray:
         """Obtain the quadratic step"""
 
+    @abstractmethod
     def _update_trust_radius(self):
         """Update the trust radius"""
 
-    @abstractmethod
-    def _build_coordinates(self):
+    def _build_coordinates(self, rebuild=False):
         """(Re-)build the coordinates for this optimiser from the species"""
+        if self._species is None:
+            raise RuntimeError("Cannot build coordinates, species is not set!")
+        cart_coords = CartesianCoordinates(self._species.coordinates)
+        primitives = AnyPIC.from_species(self._species)
+        dic = DICWithConstraints.from_cartesian(
+            x=cart_coords, primitives=primitives
+        )
+
+        if rebuild:
+            old_g = self._coords.to("cart").g
+            # TODO: how to get old Hessian
+
+    @property
+    @work_in_tmp_dir(use_ll_tmp=True)
+    def _low_level_cart_hessian(self) -> "Hessian":
+        """
+        Calculate a Hessian matrix using a low-level method, used as the
+        estimate from which Hessian updates are applied.
+        """
+        from autode.methods import get_lmethod
+
+        assert self._species is not None, "Must have a species"
+
+        logger.info("Calculating low-level Hessian")
+
+        species = self._species.copy()
+        species.calc_hessian(method=get_lmethod(), n_cores=self._n_cores)
+        assert species.hessian is not None, "Hessian calculation must be ok"
+
+        return species.hessian
 
     def _initialise_run(self) -> None:
-        """Initialise optimisation"""
+        """Initialise the optimisation"""
         logger.info("Initialising optimisation")
         self._build_coordinates()
-
-        # handle initial Hessian
-        if self._init_hess.strategy == _InitHessStrategy.CALC:
+        assert self._coords is not None
+        if self._calc_hess:
             self._update_hessian_gradient_and_energy()
-
-        self._update_gradient_and_energy()
-
-        if self._init_hess == _InitHessStrategy.READ:
-            self._coords.update_h_from_cart_h(self._init_hess.cart_arr)
+        else:
+            self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
+            self._update_gradient_and_energy()
+        return None

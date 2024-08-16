@@ -86,7 +86,7 @@ def get_lmethod() -> "Method":
         (Method): Low-level method
     """
 
-    all_methods = [XTB(), MOPAC(), ORCA(), G16(), G09(), NWChem(), QChem()]
+    all_methods = [XTB(), MOPAC()]
 
     if Config.lcode is not None:
         return get_defined_method(name=Config.lcode, possibilities=all_methods)
