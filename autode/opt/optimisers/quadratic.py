@@ -13,6 +13,7 @@ from autode.opt.coordinates import CartesianCoordinates
 from autode.opt.coordinates.internals import AnyPIC
 from autode.opt.coordinates.dic import DICWithConstraints
 from autode.log import logger
+from autode.values import PotentialEnergy
 from autode.config import Config
 from autode.utils import work_in_tmp_dir
 from autode.exceptions import CoordinateTransformFailed
@@ -37,11 +38,11 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         self,
         maxiter: int,
         conv_tol,
-        calc_hess: bool,
-        recalc_hess_every: int,
         init_trust: float,
         trust_update: bool,
         max_move,
+        calc_hess: bool,
+        recalc_hess_every: int,
         extra_prims,
         **kwargs,
     ):
@@ -60,7 +61,7 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         self._maxmove = Distance(max_move, units="ang")
         assert self._maxmove > 0, "Max movement has to be positive!"
         self._extra_prims = extra_prims
-        self._last_pred_de = 0.0
+        self._last_pred_de = None
         # TODO: remove hessian_update_types from NDOPtimiser
 
     def _step(self) -> None:
@@ -70,9 +71,15 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         """
         self._update_trust_radius()
         step = self._get_quadratic_step()
+
         try:
             self._take_step_within_max_move(step)
+            # Energy prediction only if no change in coordinates
+            last_coords = self._history.penultimate
+            self._last_pred_de = last_coords.pred_quad_delta_e(self._coords)
+
         except CoordinateTransformFailed as exc:
+            self._last_pred_de = None
             logger.warning(
                 f"Coordinate failure: {str(exc)}, rebuilding coordinate"
                 f" system and trying again..."
@@ -86,8 +93,6 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
                     "Repeated failure in coordinate system, unable to recover"
                 )
 
-        last_coords = self._history.penultimate
-        self._last_pred_de = last_coords.pred_quad_delta_e(self._coords)
         return None
 
     def _take_step_within_max_move(self, delta_s):
@@ -130,12 +135,27 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
     def _update_trust_radius(self):
         """Update the trust radius"""
 
+    def _initialise_run(self) -> None:
+        """Initialise the optimisation"""
+        logger.info("Initialising optimisation")
+        self._build_coordinates()
+        assert self._coords is not None
+        if self._calc_hess:
+            self._update_hessian_gradient_and_energy()
+        else:
+            self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
+            self._update_gradient_and_energy()
+        return None
+
     def _build_coordinates(self, rebuild=False):
         """(Re-)build the coordinates for this optimiser from the species"""
         if self._species is None:
             raise RuntimeError("Cannot build coordinates, species is not set!")
         cart_coords = CartesianCoordinates(self._species.coordinates)
         primitives = AnyPIC.from_species(self._species)
+        for prim in self._extra_prims:
+            primitives.add(prim)
+
         dic = DICWithConstraints.from_cartesian(
             x=cart_coords, primitives=primitives
         )
@@ -163,14 +183,81 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
 
         return species.hessian
 
-    def _initialise_run(self) -> None:
-        """Initialise the optimisation"""
-        logger.info("Initialising optimisation")
-        self._build_coordinates()
-        assert self._coords is not None
-        if self._calc_hess:
-            self._update_hessian_gradient_and_energy()
-        else:
-            self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
-            self._update_gradient_and_energy()
+
+class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
+    """
+    Base class for second-order minimisers
+    """
+
+    def _update_trust_radius(self):
+        """
+        Updates the trust radius comparing the predicted change in
+        energy vs. the actual change in energy. For minimisers, the
+        trust radius is *not* reduced if energy is going down more
+        than expected
+        """
+        if self.iteration == 0:
+            return None
+
+        if (not self._trust_update) or self._last_pred_de is None:
+            return None
+
+        # avoid division by zero
+        if np.abs(self._last_pred_de) < 1.0e-8:
+            return None
+
+        # only reduce if energy rises too much
+        if self.last_energy_change > PotentialEnergy(7, "kcalmol"):
+            self._trust = max(0.7, self._trust, MIN_TRUST)
+            return None
+        if self.last_energy_change > 0:
+            return None
+
+        trust_ratio = self.last_energy_change / float(self._last_pred_de)
+        last_step_size = np.linalg.norm(
+            np.array(self._history.penultimate) - np.array(self._coords)
+        )
+
+        if trust_ratio < 0.25:
+            self._trust = max(0.8, self._trust, MIN_TRUST)
+        elif 0.25 <= trust_ratio <= 0.75:
+            pass
+        elif 0.75 < trust_ratio < 1.25:
+            # increase if step was actually near trust radius
+            if abs(last_step_size - self._trust) / self._trust < 0.05:
+                self._trust = min(1.2 * self._trust, MAX_TRUST)
+        elif 1.25 <= trust_ratio <= 1.75:
+            pass
+        elif 1.75 < trust_ratio:
+            self._trust = max(0.9 * self._trust, MAX_TRUST)
+
         return None
+
+
+class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
+    """
+    Second-order transition state optimiser
+    """
+
+    def _update_trust_radius(self):
+        """
+        Updates the trust radius comparing the predicted change in
+        energy vs. the actual change in energy. For TS optimisers,
+        the trust radius must be close to 1.0 as the energy may go
+        up or down, and the validity of the quadratic model is all
+        that matters.
+        """
+        if self.iteration == 0:
+            return None
+
+        if (not self._trust_update) or self._last_pred_de is None:
+            return None
+
+        # avoid division by zero
+        if np.abs(self._last_pred_de) < 1.0e-8:
+            return None
+
+        trust_ratio = self.last_energy_change / float(self._last_pred_de)
+        last_step_size = np.linalg.norm(
+            np.array(self._history.penultimate) - np.array(self._coords)
+        )
