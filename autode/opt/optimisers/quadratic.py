@@ -28,6 +28,52 @@ MAX_TRUST = 0.2
 MIN_TRUST = 0.01
 
 
+class _InitHessStrategy(Enum):
+    READ = 1
+    CALC = 2
+    LL_GUESS = 3
+    UPDATE = 4
+
+
+class InitialHessian:
+    """
+    A class that allows various ways of the initial Hessian being
+    obtained
+    """
+
+    def __init__(self, strategy: _InitHessStrategy):
+        self.strategy = strategy
+        self.old_coords = None
+        self.cart_h = None
+
+    @classmethod
+    def from_old_coords(cls, old_coords):
+        """Obtain a new Hessian by updating from old coordinates"""
+        assert isinstance(old_coords, OptCoordinates)
+        inhess = cls(strategy=_InitHessStrategy.UPDATE)
+        inhess.old_coords = old_coords
+        return inhess
+
+    @classmethod
+    def from_cart_h(cls, cart_h):
+        assert isinstance(cart_h, np.ndarray)
+        inhess = cls(strategy=_InitHessStrategy.READ)
+        inhess.cart_h = cart_h
+        return inhess
+
+    @classmethod
+    def from_calc(cls):
+        """Calculate the Hessian at current level-of-theory"""
+        inhess = cls(strategy=_InitHessStrategy.CALC)
+        return inhess
+
+    @classmethod
+    def from_ll_guess(cls):
+        """Obtain a guess Hessian using a low-level method"""
+        inhess = cls(strategy=_InitHessStrategy.LL_GUESS)
+        return inhess
+
+
 class QuadraticOptimiserBase(NDOptimiser, ABC):
     """
     Base class for Hessian based optimisers in internal coordinates
