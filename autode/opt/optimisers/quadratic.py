@@ -188,9 +188,13 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         assert self._coords is not None
         if self._init_hess.strategy == _InitHessStrategy.CALC:
             self._update_hessian_gradient_and_energy()
-        else:
+            return None
+
+        self._update_gradient_and_energy()
+        if self._init_hess.strategy == _InitHessStrategy.READ:
+            self._coords.update_h_from_cart_h(self._init_hess.cart_h)
+        elif self._init_hess.strategy == _InitHessStrategy.LL_GUESS:
             self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
-            self._update_gradient_and_energy()
         # TODO: handle all possible cases
         return None
 
