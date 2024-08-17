@@ -84,18 +84,18 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         self,
         maxiter: int,
         conv_tol,
+        init_hess: InitialHessian,
+        recalc_hess_every: int,
         init_trust: float,
         trust_update: bool,
         max_move,
-        calc_hess: bool,
-        recalc_hess_every: int,
         extra_prims,
         **kwargs,
     ):
         """ """
         super().__init__(maxiter=maxiter, conv_tol=conv_tol, **kwargs)
 
-        self._calc_hess = calc_hess
+        self._init_hess = init_hess
         self._recalc_hess_every = recalc_hess_every
         self._trust = float(init_trust)
         if not MIN_TRUST < self._trust < MAX_TRUST:
@@ -186,11 +186,12 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         logger.info("Initialising optimisation")
         self._build_coordinates()
         assert self._coords is not None
-        if self._calc_hess:
+        if self._init_hess.strategy == _InitHessStrategy.CALC:
             self._update_hessian_gradient_and_energy()
         else:
             self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
             self._update_gradient_and_energy()
+        # TODO: handle all possible cases
         return None
 
     def _build_coordinates(self, rebuild=False):
@@ -209,6 +210,8 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         if rebuild:
             old_g = self._coords.to("cart").g
             # TODO: how to get old Hessian
+
+        self._coords = dic
 
     @property
     @work_in_tmp_dir(use_ll_tmp=True)
@@ -234,6 +237,32 @@ class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
     """
     Base class for second-order minimisers
     """
+
+    def __init__(
+        self,
+        maxiter: int,
+        conv_tol,
+        init_hess: InitialHessian = InitialHessian.from_ll_guess(),
+        recalc_hess_every: int = 0,
+        **kwargs,
+    ):
+        """
+        Initialise a second-order minimiser
+
+        Args:
+            maxiter:
+            conv_tol:
+            init_hess:
+            recalc_hess_every:
+            **kwargs:
+        """
+        super().__init__(
+            maxiter=maxiter,
+            conv_tol=conv_tol,
+            init_hess=init_hess,
+            recalc_hess_every=recalc_hess_every,
+            **kwargs,
+        )
 
     def _update_trust_radius(self):
         """
@@ -284,6 +313,32 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
     """
     Second-order transition state optimiser
     """
+
+    def __init__(
+        self,
+        maxiter: int,
+        conv_tol,
+        init_hess: InitialHessian = InitialHessian.from_calc(),
+        recalc_hess_every: int = 20,
+        **kwargs,
+    ):
+        """
+        Initialise a second-order minimiser
+
+        Args:
+            maxiter:
+            conv_tol:
+            init_hess:
+            recalc_hess_every:
+            **kwargs:
+        """
+        super().__init__(
+            maxiter=maxiter,
+            conv_tol=conv_tol,
+            init_hess=init_hess,
+            recalc_hess_every=recalc_hess_every,
+            **kwargs,
+        )
 
     def _update_trust_radius(self):
         """
