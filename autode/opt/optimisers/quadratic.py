@@ -2,7 +2,7 @@
 Base classes of second-order (quadratic) optimisers
 """
 from abc import ABC, abstractmethod
-from typing import Optional, List, Type, TYPE_CHECKING
+from typing import Optional, Union, List, TYPE_CHECKING
 from enum import Enum
 import numpy as np
 
@@ -21,6 +21,8 @@ from autode.exceptions import CoordinateTransformFailed
 if TYPE_CHECKING:
     from autode.species.species import Species
     from autode.wrappers.methods import Method
+    from autode.opt.coordinates.primitives import Primitive
+    from autode.opt.optimisers.base import ConvergenceTolStr, ConvergenceParams
     from autode.hessians import Hessian
 
 
@@ -83,16 +85,30 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
     def __init__(
         self,
         maxiter: int,
-        conv_tol,
+        conv_tol: Union["ConvergenceParams", "ConvergenceTolStr"],
         init_hess: InitialHessian,
-        recalc_hess_every: int,
-        init_trust: float,
-        trust_update: bool,
-        max_move,
-        extra_prims,
+        recalc_hess_every: Optional[int] = None,
+        init_trust: float = 0.1,
+        trust_update: bool = True,
+        max_move: Union[Distance, float] = Distance(0.12, "ang"),
+        extra_prims: Optional[List["Primitive"]] = None,
         **kwargs,
     ):
-        """ """
+        """
+        Initialise a second-order optimiser
+
+        Args:
+            maxiter: Maximum number of iterations
+            conv_tol: Convergence tolerance
+            init_hess: Initial Hessian - must be an InitialHessian object
+            recalc_hess_every: Recalculate accurate Hessian every N steps
+            init_trust: Initial value of the trust radius
+            trust_update: Whether to update the trust radius or not
+            max_move: Maximum distance any atom can move in a single step
+            extra_prims: Additional primitive constraints to be added to
+                        the optimisation space
+            **kwargs:
+        """
         super().__init__(maxiter=maxiter, conv_tol=conv_tol, **kwargs)
 
         self._init_hess = init_hess
@@ -115,6 +131,12 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         Take a quadratic step, ensuring the trust radius is updated and
         the coordinate system rebuilt if needed
         """
+        assert self._coords is not None, "Must have coords!"
+        # TODO handle hessian recalculation
+        if self.iteration != 0:
+            self._coords.update_h_from_old_h(
+                self._history.penultimate, self._hessian_update_types
+            )
         self._update_trust_radius()
         step = self._get_quadratic_step()
 
@@ -247,7 +269,7 @@ class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
         maxiter: int,
         conv_tol,
         init_hess: InitialHessian = InitialHessian.from_ll_guess(),
-        recalc_hess_every: int = 0,
+        recalc_hess_every: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -272,8 +294,8 @@ class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
         """
         Updates the trust radius comparing the predicted change in
         energy vs. the actual change in energy. For minimisers, the
-        trust radius is *not* reduced if energy is going down more
-        than expected
+        trust radius is reduced if energy rises, even if quadratic
+        prediction matches.
         """
         if self.iteration == 0:
             return None
@@ -298,17 +320,17 @@ class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
         )
 
         if trust_ratio < 0.25:
-            self._trust = max(0.8, self._trust, MIN_TRUST)
+            self._trust = max(0.8 * self._trust, MIN_TRUST)
         elif 0.25 <= trust_ratio <= 0.75:
             pass
         elif 0.75 < trust_ratio < 1.25:
             # increase if step was actually near trust radius
             if abs(last_step_size - self._trust) / self._trust < 0.05:
-                self._trust = min(1.2 * self._trust, MAX_TRUST)
+                self._trust = min(1.15 * self._trust, MAX_TRUST)
         elif 1.25 <= trust_ratio <= 1.75:
             pass
         elif 1.75 < trust_ratio:
-            self._trust = max(0.9 * self._trust, MAX_TRUST)
+            self._trust = min(0.9 * self._trust, MIN_TRUST)
 
         return None
 
@@ -324,6 +346,7 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
         conv_tol,
         init_hess: InitialHessian = InitialHessian.from_calc(),
         recalc_hess_every: int = 20,
+        imag_mode_idx: int = 0,
         **kwargs,
     ):
         """
@@ -334,6 +357,8 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
             conv_tol:
             init_hess:
             recalc_hess_every:
+            imag_mode_idx: Index of the imaginary mode to follow. Default is the
+                        0th mode, i.e. the most negative mode
             **kwargs:
         """
         super().__init__(
@@ -343,6 +368,8 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
             recalc_hess_every=recalc_hess_every,
             **kwargs,
         )
+        self._mode_idx = imag_mode_idx
+        self._last_eigvec: Optional[np.ndarray] = None  # store last mode
 
     def _update_trust_radius(self):
         """
@@ -366,3 +393,22 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
         last_step_size = np.linalg.norm(
             np.array(self._history.penultimate) - np.array(self._coords)
         )
+
+        if trust_ratio < 0.25:
+            self._trust = max(0.7 * self._trust, MIN_TRUST)
+        elif 0.25 <= trust_ratio <= 0.5:
+            self._trust = max(0.9 * self._trust, MIN_TRUST)
+        elif 0.5 < trust_ratio < 0.75:
+            pass
+        elif 0.75 <= trust_ratio <= 1.25:
+            # increase if step was actually near trust radius
+            if abs(last_step_size - self._trust) / self._trust < 0.05:
+                self._trust = min(1.1 * self._trust, MAX_TRUST)
+        elif 1.25 < trust_ratio < 1.5:
+            pass
+        elif 1.25 <= trust_ratio <= 1.75:
+            self._trust = max(0.9 * self._trust, MIN_TRUST)
+        elif 1.75 < trust_ratio:
+            self._trust = max(0.7 * self._trust, MIN_TRUST)
+
+        return None
