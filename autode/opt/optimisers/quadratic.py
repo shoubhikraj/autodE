@@ -14,6 +14,11 @@ from autode.opt.coordinates.internals import AnyPIC
 from autode.opt.coordinates.dic import DICWithConstraints
 from autode.log import logger
 from autode.values import PotentialEnergy
+from autode.opt.optimisers.hessian_update import (
+    BFGSSR1Update,
+    BFGSDampedUpdate,
+    BofillUpdate,
+)
 from autode.config import Config
 from autode.utils import work_in_tmp_dir
 from autode.exceptions import CoordinateTransformFailed
@@ -152,7 +157,7 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
                 f"Coordinate failure: {str(exc)}, rebuilding coordinate"
                 f" system and trying again..."
             )
-            self._build_coordinates()
+            self._reset_coordinates()
             try:
                 step = self._get_quadratic_step()
                 self._take_step_within_max_move(step)
@@ -239,6 +244,13 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
 
         self._coords = dic
 
+    @abstractmethod
+    def _reset_coordinates(self):
+        """
+        Rebuild the coordinates, and reset variables that depend on the
+        old set of coordinates
+        """
+
     @property
     @work_in_tmp_dir(use_ll_tmp=True)
     def _low_level_cart_hessian(self) -> "Hessian":
@@ -289,6 +301,7 @@ class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
             recalc_hess_every=recalc_hess_every,
             **kwargs,
         )
+        self._hessian_update_types = [BFGSDampedUpdate, BFGSSR1Update]
 
     def _update_trust_radius(self):
         """
@@ -370,14 +383,14 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
         )
         self._mode_idx = imag_mode_idx
         self._last_eigvec: Optional[np.ndarray] = None  # store last mode
+        self._hessian_update_types = [BofillUpdate]
 
     def _update_trust_radius(self):
         """
         Updates the trust radius comparing the predicted change in
         energy vs. the actual change in energy. For TS optimisers,
-        the trust radius must be close to 1.0 as the energy may go
-        up or down, and the validity of the quadratic model is all
-        that matters.
+        the trust ratio must be close to 1.0 as the energy may go
+        up or down, and the trust radius changes must be more cautious
         """
         if self.iteration == 0:
             return None
@@ -386,7 +399,7 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
             return None
 
         # avoid division by zero
-        if np.abs(self._last_pred_de) < 1.0e-8:
+        if np.abs(self._last_pred_de) < 1.0e-6:
             return None
 
         trust_ratio = self.last_energy_change / float(self._last_pred_de)
@@ -395,20 +408,20 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
         )
 
         if trust_ratio < 0.25:
-            self._trust = max(0.7 * self._trust, MIN_TRUST)
+            self._trust = max(0.8 * self._trust, MIN_TRUST)
         elif 0.25 <= trust_ratio <= 0.5:
-            self._trust = max(0.9 * self._trust, MIN_TRUST)
+            self._trust = max(0.95 * self._trust, MIN_TRUST)
         elif 0.5 < trust_ratio < 0.75:
             pass
         elif 0.75 <= trust_ratio <= 1.25:
             # increase if step was actually near trust radius
             if abs(last_step_size - self._trust) / self._trust < 0.05:
-                self._trust = min(1.1 * self._trust, MAX_TRUST)
+                self._trust = min(1.05 * self._trust, MAX_TRUST)
         elif 1.25 < trust_ratio < 1.5:
             pass
         elif 1.25 <= trust_ratio <= 1.75:
-            self._trust = max(0.9 * self._trust, MIN_TRUST)
+            self._trust = max(0.95 * self._trust, MIN_TRUST)
         elif 1.75 < trust_ratio:
-            self._trust = max(0.7 * self._trust, MIN_TRUST)
+            self._trust = max(0.8 * self._trust, MIN_TRUST)
 
         return None

@@ -173,6 +173,7 @@ class Optimiser(BaseOptimiser, ABC):
                 break
 
         logger.info(f"Converged: {self.converged}, in {self.iteration} cycles")
+        self._finish_run()
         self._history.close()
         return None
 
@@ -378,6 +379,13 @@ class Optimiser(BaseOptimiser, ABC):
             self._coords.g
             self._coords.h
         """
+
+    def _finish_run(self) -> None:
+        """
+        Any post-processing that might be required at the end of the
+        optimisation
+        """
+        pass
 
     @property
     @abstractmethod

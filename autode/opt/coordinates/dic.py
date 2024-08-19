@@ -182,22 +182,36 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
 
         return None
 
-    def to(self, value: str) -> "OptCoordinates":
+    def to(self, value: str, transform_h: bool = False) -> "OptCoordinates":
         """
         Convert these DICs to another type of coordinate
 
         -----------------------------------------------------------------------
         Arguments:
             value (str): e.g. "Cartesian"
+            transform_h (bool): Whether to transform the updated Hessian in
+                        DIC space back to Cartesian, if the Cartesian coordinates
+                        has no Hessian matrix already
 
         Returns:
             (autode.opt.coordinates.OptCoordinates): Coordinates
         """
+        if not value.lower() in ("x", "cart", "cartesian"):
+            raise ValueError(f"Unknown conversion to {value}")
 
-        if value.lower() in ("x", "cart", "cartesian"):
+        if not transform_h or self._x.h is not None:
             return self._x
 
-        raise ValueError(f"Unknown conversion to {value}")
+        if self._h is None:
+            raise ValueError(
+                "Hessian matrix in Cartesian coordinates requested but"
+                " updated Hessian in DIC is not available!"
+            )
+
+        _x = self._x.copy()
+        x_h = np.linalg.multi_dot((self.B.T, self._h, self.B))
+        _x.h = x_h
+        return _x
 
     def iadd(self, value: np.ndarray) -> "OptCoordinates":
         """
@@ -227,7 +241,7 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
 
         success = False
         rms_s = np.inf
-        # NOTE: J. Comput. Chem., 2013, 34, 1842 suggests if step size
+        # NOTE: J. Comput. Chem., 2013, 34, 1842 shows that if step size
         # is larger than 0.5 bohr (= 0.2 Å), internal step can be halved
         # for easier convergence (i.e. damp = 1/2)
         if np.linalg.norm(value) > 0.2:
@@ -257,7 +271,7 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
                     damp = 1.0
                 # RMS going down, reduce damping
                 elif rms_s < rms_s_old and i > 1:
-                    damp = min(1.2 * damp, 1.0)
+                    damp = min(1.1 * damp, 1.0)
                 # RMS going up, increase damping
                 elif rms_s > rms_s_old:
                     damp = max(0.7 * damp, 0.1)
