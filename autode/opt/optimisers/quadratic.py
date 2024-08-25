@@ -213,6 +213,7 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         logger.info("Initialising optimisation")
         self._build_coordinates()
         assert self._coords is not None
+
         if self._init_hess.strategy == _InitHessStrategy.CALC:
             self._update_hessian_gradient_and_energy()
             return None
@@ -220,15 +221,24 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         self._update_gradient_and_energy()
         if self._init_hess.strategy == _InitHessStrategy.READ:
             self._coords.update_h_from_cart_h(self._init_hess.cart_h)
+
         elif self._init_hess.strategy == _InitHessStrategy.LL_GUESS:
             self._coords.update_h_from_cart_h(self._low_level_cart_hessian)
-        # TODO: handle all possible cases
+
+        # update must be done in consistent coordinate system
+        elif self._init_hess.strategy == _InitHessStrategy.UPDATE:
+            assert self._init_hess.old_coords is not None
+            old_x = self._init_hess.old_coords.to("cart", transform_h=True)
+            new_x = self._coords.to("cart")
+            new_x.update_h_from_old_h(old_x, self._hessian_update_types)
+            self._coords.update_h_from_cart_h(new_x.h)
         return None
 
-    def _build_coordinates(self, rebuild=False):
+    def _build_coordinates(self, species=None):
         """(Re-)build the coordinates for this optimiser from the species"""
-        if self._species is None:
-            raise RuntimeError("Cannot build coordinates, species is not set!")
+        species = self._species if species is None else species
+        assert species is not None, "Must have species to build coordinates!"
+
         cart_coords = CartesianCoordinates(self._species.coordinates)
         primitives = AnyPIC.from_species(self._species)
         for prim in self._extra_prims:
@@ -238,18 +248,21 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
             x=cart_coords, primitives=primitives
         )
 
-        if rebuild:
-            old_g = self._coords.to("cart").g
-            # TODO: how to get old Hessian
-
         self._coords = dic
 
-    @abstractmethod
     def _reset_coordinates(self):
         """
         Rebuild the coordinates, and reset variables that depend on the
         old set of coordinates
         """
+        old_x = self._coords.to("cart", transform_h=True)
+        tmp_spc = self._species.copy()
+        tmp_spc.reset_graph()
+        self._build_coordinates(tmp_spc)
+        self._coords.update_g_from_cart_g(old_x.g)
+        self._coords.update_h_from_cart_h(old_x.h)
+        self._last_pred_de = None
+        return None
 
     @property
     @work_in_tmp_dir(use_ll_tmp=True)
@@ -385,6 +398,15 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
         self._last_eigvec: Optional[np.ndarray] = None  # store last mode
         self._hessian_update_types = [BofillUpdate]
 
+    def _reset_coordinates(self):
+        """For TS optimisers, last eigenvector has to be reset as well"""
+        # change the followed mode to the current coordinate system
+        _, u = np.linalg.eigvalsh(self._coords.h)
+        self._mode_idx = self._get_imag_mode_idx(u)
+        super()._reset_coordinates()
+        self._last_eigvec = None
+        return None
+
     def _update_trust_radius(self):
         """
         Updates the trust radius comparing the predicted change in
@@ -425,3 +447,26 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
             self._trust = max(0.8 * self._trust, MIN_TRUST)
 
         return None
+
+    def _get_imag_mode_idx(self, u: np.ndarray):
+        """
+        Find the imaginary mode to follow upwards in the current step.
+
+        Args:
+            u (np.ndarray): The current Hessian eigenvectors
+
+        Returns:
+            (int): Integer
+        """
+        if self._last_eigvec is None:
+            return self._mode_idx
+
+        overlaps = []
+        for i in range(u.shape[1]):
+            overlaps.append(
+                np.abs(np.dot(u[:, i].flatten(), self._last_eigvec))
+            )
+
+        mode_idx = np.argmax(overlaps)
+        logger.info(f"Overlap with previous TS mode: {overlaps[mode_idx]:.3f}")
+        return mode_idx

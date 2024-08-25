@@ -189,9 +189,10 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
         -----------------------------------------------------------------------
         Arguments:
             value (str): e.g. "Cartesian"
+
             transform_h (bool): Whether to transform the updated Hessian in
                         DIC space back to Cartesian, if the Cartesian coordinates
-                        has no Hessian matrix already
+                        does not have Hessian matrix already available
 
         Returns:
             (autode.opt.coordinates.OptCoordinates): Coordinates
@@ -199,7 +200,7 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
         if not value.lower() in ("x", "cart", "cartesian"):
             raise ValueError(f"Unknown conversion to {value}")
 
-        if not transform_h or self._x.h is not None:
+        if (not transform_h) or (self._x.h is not None):
             return self._x
 
         if self._h is None:

@@ -79,7 +79,7 @@ class CartesianCoordinates(OptCoordinates):
     def iadd(self, value: np.ndarray) -> OptCoordinates:
         return np.ndarray.__iadd__(self, value)
 
-    def to(self, value: str) -> OptCoordinates:
+    def to(self, value: str, transform_h: bool = False) -> OptCoordinates:
         """
         Transform between cartesian and internal coordinates e.g. delocalised
         internal coordinates or other units
@@ -87,6 +87,8 @@ class CartesianCoordinates(OptCoordinates):
         -----------------------------------------------------------------------
         Arguments:
             value (str): Intended conversion
+
+            transform_h (bool): Unused parameter
 
         Returns:
             (autode.opt.coordinates.OptCoordinates): Transformed coordinates
