@@ -117,7 +117,18 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         super().__init__(maxiter=maxiter, conv_tol=conv_tol, **kwargs)
 
         self._init_hess = init_hess
+
+        if recalc_hess_every is not None:
+            assert int(recalc_hess_every) > 0
+            if self._init_hess.strategy == _InitHessStrategy.LL_GUESS:
+                raise ValueError(
+                    f"Hessian is recalculated every {recalc_hess_every} "
+                    f"steps, but initial low-level guess Hessian "
+                    f"requested!"
+                )
+            recalc_hess_every = int(recalc_hess_every)
         self._recalc_hess_every = recalc_hess_every
+
         self._trust = float(init_trust)
         if not MIN_TRUST < self._trust < MAX_TRUST:
             self._trust = min(max(init_trust, MIN_TRUST), MAX_TRUST)
@@ -137,11 +148,17 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         the coordinate system rebuilt if needed
         """
         assert self._coords is not None, "Must have coords!"
-        # TODO handle hessian recalculation
-        if self.iteration != 0:
-            self._coords.update_h_from_old_h(
-                self._history.penultimate, self._hessian_update_types
-            )
+
+        if self.iteration > 1:
+            if self._recalc_hess_every is not None and (
+                self.iteration % self._recalc_hess_every == 0
+            ):
+                self._update_hessian()
+            else:
+                self._coords.update_h_from_old_h(
+                    self._history.penultimate, self._hessian_update_types
+                )
+
         self._update_trust_radius()
         step = self._get_quadratic_step()
 
