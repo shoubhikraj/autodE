@@ -13,11 +13,11 @@ import numpy as np
 from scipy.optimize import root_scalar
 
 from autode.log import logger
-from autode.opt.optimisers.crfo import CRFOptimiser
+from autode.opt.optimisers.crfo import CRFOptimiserOLD
 from autode.exceptions import OptimiserStepError
 
 
-class QAOptimiser(CRFOptimiser):
+class QAOptimiser(CRFOptimiserOLD):
     """Quadratic trust-radius optimiser in delocalised internal coordinates"""
 
     def _step(self) -> None:

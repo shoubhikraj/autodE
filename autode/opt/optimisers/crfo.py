@@ -12,6 +12,7 @@ from autode.log import logger
 from autode.values import GradientRMS, Distance
 from autode.opt.coordinates import CartesianCoordinates, DICWithConstraints
 from autode.opt.coordinates.internals import AnyPIC
+from autode.opt.optimisers.quadratic import QuadraticMinimiser
 from autode.opt.optimisers.rfo import RFOptimiser
 from autode.exceptions import OptimiserStepError
 from autode.opt.optimisers.hessian_update import (
@@ -27,7 +28,90 @@ MAX_TRUST = 0.2
 MIN_TRUST = 0.01
 
 
-class CRFOptimiser(RFOptimiser):
+class CRFOptimiser(QuadraticMinimiser):
+    """
+    Constrained optimisation in delocalised internal coordinates
+    """
+
+    def _log_constrained_opt_progress(self):
+        """Log information about the constraints"""
+        n, m = len(self._coords), self._coords.n_constraints
+        s = self._coords.n_satisfied_constraints
+        logger.info(f"Optimising {n} coordinates and {m} lagrange multipliers")
+
+        idxs = self._coords.active_indexes
+        logger.info(
+            f"Satisfied {s} constraints. Active space"
+            f" is {len(idxs)} dimensional"
+        )
+        d2l_ev = np.linalg.eigvalsh(self._coords.h[:, idxs][idxs, :])
+        logger.info(
+            f"Hessian in active space has {sum(k < 0 for k in d2l_ev)} "
+            f"negative eigenvalue(s). Should have {m-s}"
+        )
+        return None
+
+    def _check_shifted_hessian_has_correct_struct(self, arr) -> None:
+        """
+        Check that the shifted Hessian from RFO or QA has correct
+        eigenvalue structure, i.e. has the same number of negative
+        eigenvalues as the number of active constraints
+
+        Args:
+            arr (np.ndarray): Shifted hessian to check
+
+        Raises:
+            (OptimiserStepError): if Hessian does not have correct structure
+        """
+        assert self._coords is not None
+        m = self._coords.n_constraints
+        o = m - self._coords.n_satisfied_constraints
+        ev = np.linalg.eigvalsh(arr)
+        n_negative = sum(k < 0 for k in ev)
+        if not o == n_negative:
+            raise OptimiserStepError(
+                f"Failed to obtain step, shifted Hessian should have {o}"
+                f" negative eigenvalue(s), but has {n_negative}"
+            )
+        return None
+
+    def _get_quadratic_step(self) -> np.ndarray:
+        """
+        Partitioned Rational Function step with uphill step along
+        the constraint modes and downhill along all other modes
+        """
+        assert self._coords is not None, "Must have coordinates!"
+        assert self._coords.g is not None, "Must have gradient!"
+        n, m = len(self._coords), self._coords.n_constraints
+        idxs = self._coords.active_indexes
+
+        # only molec. Hessian should be +ve definite
+        lmda = self._coords.rfo_shift
+        hess = self._coords.h - lmda * np.eye(n + m)
+        # no shift on constraints
+        for i in range(m):
+            hess[-m + i, -m + i] = 0.0
+
+        logger.info(f"Calculated RFO λ = {lmda:.4f}")
+        # RFO step in active space
+        hess = hess[:, idxs][idxs, :]
+        grad = self._coords.g[idxs]
+        self._check_shifted_hessian_has_correct_struct(hess)
+        delta_s = np.zeros(shape=(n + m))
+        rfo_step = -np.matmul(np.linalg.inv(hess), grad)
+        delta_s[idxs] = rfo_step
+
+        # scale back to trust radius (only non-constraint modes)
+        delta_s_q = delta_s[:n]
+        if np.linalg.norm(delta_s_q) > self._trust:
+            logger.info("Scaling RFO step to trust radius")
+            delta_s = delta_s * self._trust / np.linalg.norm(delta_s_q)
+
+        logger.info("Taking an RFO step")
+        return delta_s
+
+
+class CRFOptimiserOLD(RFOptimiser):
     """Constrained optimisation in delocalised internal coordinates"""
 
     def __init__(
@@ -143,29 +227,6 @@ class CRFOptimiser(RFOptimiser):
         full_step[idxs] = rfo_step
 
         return full_step
-
-    def _check_shifted_hessian_has_correct_struct(self, arr) -> None:
-        """
-        Check that the shifted Hessian from RFO or QA has correct
-        eigenvalue structure
-
-        Args:
-            arr (np.ndarray): Shifted hessian to check
-
-        Raises:
-            (OptimiserStepError): if Hessian does not have correct structure
-        """
-        assert self._coords is not None
-        m = self._coords.n_constraints
-        o = m - self._coords.n_satisfied_constraints
-        ev = np.linalg.eigvalsh(arr)
-        n_negative = sum(k < 0 for k in ev)
-        if not o == n_negative:
-            raise OptimiserStepError(
-                f"Failed to obtain step, shifted Hessian should have {o}"
-                f" negative eigenvalue(s), but has {n_negative}"
-            )
-        return None
 
     def _take_step_within_max_move(self, delta_s: np.ndarray):
         """
