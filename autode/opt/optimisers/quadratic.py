@@ -138,7 +138,7 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         self._trust_update = bool(trust_update)
         self._maxmove = Distance(max_move, units="ang")
         assert self._maxmove > 0, "Max movement has to be positive!"
-        self._extra_prims = extra_prims
+        self._extra_prims = [] if extra_prims is None else list(extra_prims)
         self._last_pred_de = None
         # TODO: remove hessian_update_types from NDOPtimiser
 
@@ -149,7 +149,7 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         """
         assert self._coords is not None, "Must have coords!"
 
-        if self.iteration > 1:
+        if self.iteration > 0:
             if self._recalc_hess_every is not None and (
                 self.iteration % self._recalc_hess_every == 0
             ):
