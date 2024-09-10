@@ -353,36 +353,35 @@ class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
         # TODO fix the logic here, always print the trust radius
         # does it matter if energy rises if surface is quadratic
 
-        # only reduce if energy rises too much
-        if self.last_energy_change > PotentialEnergy(7, "kcalmol"):
-            self._trust = max(0.7, self._trust, MIN_TRUST)
-            return None
-        if self.last_energy_change > 0:
-            return None
-
         trust_ratio = self.last_energy_change / float(self._last_pred_de)
         last_step_size = np.linalg.norm(
             np.array(self._history.penultimate) - np.array(self._coords)
         )
+        new_trust = self._trust
 
         if trust_ratio < 0.25:
-            self._trust = max(0.8 * self._trust, MIN_TRUST)
+            new_trust = max(0.8 * self._trust, MIN_TRUST)
         elif 0.25 <= trust_ratio <= 0.75:
             pass
         elif 0.75 < trust_ratio < 1.25:
             # increase if step was actually near trust radius
             if abs(last_step_size - self._trust) / self._trust < 0.05:
-                self._trust = min(1.15 * self._trust, MAX_TRUST)
+                new_trust = min(1.15 * self._trust, MAX_TRUST)
         elif 1.25 <= trust_ratio <= 1.75:
             pass
         elif 1.75 < trust_ratio:
-            self._trust = min(0.9 * self._trust, MIN_TRUST)
+            new_trust = min(0.9 * self._trust, MIN_TRUST)
+
+        # NOTE: Energy may rise if there are unsatisfied constraints
+        # -- ensure that it does not rise too much in a single step
+        if self.last_energy_change > PotentialEnergy(5, "kcalmol"):
+            new_trust = max(0.8, self._trust, MIN_TRUST)
 
         logger.info(
             f"Ratio of actual/predicted dE = {trust_ratio:.3f},"
-            f" Current trust radius = {self._trust:.3f}"
+            f" New trust radius = {new_trust:.3f}"
         )
-
+        self._trust = new_trust
         return None
 
 
@@ -446,36 +445,37 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
             return None
 
         # avoid division by zero
-        if np.abs(self._last_pred_de) < 1.0e-6:
+        if np.abs(self._last_pred_de) < 1.0e-8:
             return None
 
         trust_ratio = self.last_energy_change / float(self._last_pred_de)
         last_step_size = np.linalg.norm(
             np.array(self._history.penultimate) - np.array(self._coords)
         )
+        new_trust = self._trust
 
         if trust_ratio < 0.25:
-            self._trust = max(0.7 * self._trust, MIN_TRUST)
+            new_trust = max(0.7 * self._trust, MIN_TRUST)
         elif 0.25 <= trust_ratio <= 0.5:
-            self._trust = max(0.95 * self._trust, MIN_TRUST)
+            new_trust = max(0.95 * self._trust, MIN_TRUST)
         elif 0.5 < trust_ratio < 0.75:
             pass
         elif 0.75 <= trust_ratio <= 1.25:
             # increase if step was actually near trust radius
             if abs(last_step_size - self._trust) / self._trust < 0.05:
-                self._trust = min(1.05 * self._trust, MAX_TRUST)
+                new_trust = min(1.05 * self._trust, MAX_TRUST)
         elif 1.25 < trust_ratio < 1.5:
             pass
         elif 1.25 <= trust_ratio <= 1.75:
-            self._trust = max(0.95 * self._trust, MIN_TRUST)
+            new_trust = max(0.95 * self._trust, MIN_TRUST)
         elif 1.75 < trust_ratio:
-            self._trust = max(0.7 * self._trust, MIN_TRUST)
+            new_trust = max(0.7 * self._trust, MIN_TRUST)
 
         logger.info(
             f"Ratio of actual/predicted dE = {trust_ratio:.3f},"
             f" Current trust radius = {self._trust:.3f}"
         )
-
+        self._trust = new_trust
         return None
 
     def _get_imag_mode_idx(self, u: np.ndarray):
