@@ -76,6 +76,22 @@ class CRFOptimiser(QuadraticMinimiser):
         return None
 
     def _get_quadratic_step(self) -> np.ndarray:
+        """RFO step with constraints"""
+        assert self._coords is not None, "Must have coordinates!"
+
+        self._log_constrained_opt_progress()
+        n = len(self._coords)
+        step = self._get_rfo_step()
+
+        # scale back only on non-constraint modes
+        if np.linalg.norm(step[:n]) > self._trust:
+            logger.info("Scaling RFO step to trust radius")
+            step = step * self._trust / np.linalg.norm(step[:n])
+
+        logger.info("Taking an RFO step")
+        return step
+
+    def _get_rfo_step(self) -> np.ndarray:
         """
         Partitioned Rational Function step with uphill step along
         the constraint modes and downhill along all other modes
@@ -100,14 +116,6 @@ class CRFOptimiser(QuadraticMinimiser):
         delta_s = np.zeros(shape=(n + m))
         rfo_step = -np.matmul(np.linalg.inv(hess), grad)
         delta_s[idxs] = rfo_step
-
-        # scale back to trust radius (only non-constraint modes)
-        delta_s_q = delta_s[:n]
-        if np.linalg.norm(delta_s_q) > self._trust:
-            logger.info("Scaling RFO step to trust radius")
-            delta_s = delta_s * self._trust / np.linalg.norm(delta_s_q)
-
-        logger.info("Taking an RFO step")
         return delta_s
 
 

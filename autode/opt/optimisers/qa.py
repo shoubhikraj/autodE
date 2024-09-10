@@ -13,11 +13,109 @@ import numpy as np
 from scipy.optimize import root_scalar
 
 from autode.log import logger
-from autode.opt.optimisers.crfo import CRFOptimiserOLD
+from autode.opt.optimisers.crfo import CRFOptimiserOLD, CRFOptimiser
 from autode.exceptions import OptimiserStepError
 
 
-class QAOptimiser(CRFOptimiserOLD):
+class QAOptimiser(CRFOptimiser):
+    """Quadratic trust-radius optimiser in delocalised internal coordinates"""
+
+    def _get_quadratic_step(self) -> np.ndarray:
+        """
+        Hybrid QA - RFO step
+        """
+        assert self._coords is not None, "Must have coordinates!"
+        self._log_constrained_opt_progress()
+
+        n = len(self._coords)
+        # Take RFO step if within trust radius
+        step_rfo = self._get_rfo_step()
+        if np.linalg.norm(step_rfo[:n]) <= self._trust:
+            logger.info("Taking an RFO step")
+            return step_rfo
+
+        # use QA to calculate step exactly at trust radius
+        try:
+            step_qa = self._get_qa_step()
+            logger.info("Taking a QA step within trust radius")
+            return step_qa
+
+        # if QA procedure fails, use scaled RFO
+        except OptimiserStepError as exc:
+            logger.info(
+                f"Failed to calculate step within trust radius:"
+                f"{str(exc)}, using scaled RFO step instead"
+            )
+            factor = self._trust / np.linalg.norm(step_rfo[:n])
+            return step_rfo * float(factor)
+
+    def _get_qa_step(self):
+        """
+        Calculate the quadratic step within trust radius by minimising
+        the energy on the surface of a hypersphere
+
+        Returns:
+            (np.ndarray): The trust radius step
+        """
+        n, m = len(self._coords), self._coords.n_constraints
+        idxs = self._coords.active_indexes
+
+        def shifted_newton_step(hess, grad, lmda, check=False):
+            """
+            Level-shifted Newton step (H-λI)^-1 . g with
+            optional check of Hessian eigenvalue structure
+            """
+            hess = hess - lmda * np.eye(hess.shape[0])
+            # no shift on constraints
+            for i in range(m):
+                hess[-m + i, -m + i] = 0.0
+            full_step = np.zeros_like(grad)
+            hess = hess[:, idxs][idxs, :]
+            grad = grad[idxs]
+            if check:
+                self._check_shifted_hessian_has_correct_struct(hess)
+            qa_step = -np.matmul(np.linalg.inv(hess), grad)
+            full_step[idxs] = qa_step
+            return full_step
+
+        def qa_step_error(lmda):
+            """Error in step size for shift factor λ"""
+            ds = shifted_newton_step(self._coords.h, self._coords.g, lmda)
+            ds_atoms = ds[:n]
+            return np.linalg.norm(ds_atoms) - self._trust
+
+        # if molar Hessian +ve definite & step within trust use simple qN
+        min_b = self._coords.min_eigval
+        if min_b > 0 and qa_step_error(0.0) <= 0.0:
+            return shifted_newton_step(
+                self._coords.h, self._coords.g, 0.0, check=True
+            )
+
+        # Find λ in range (-inf, b)
+        for k in range(500):
+            right_bound = min_b - 0.5**k
+            if qa_step_error(right_bound) > 0:
+                break
+        assert qa_step_error(right_bound) > 0
+
+        for k in range(-6, 10):
+            left_bound = right_bound - 2**k
+            if qa_step_error(left_bound) < 0:
+                break
+        if not qa_step_error(left_bound) < 0:
+            raise OptimiserStepError("Unable to find bounds for root search")
+
+        res = root_scalar(f=qa_step_error, bracket=[left_bound, right_bound])
+        if (not res.converged) or (res.root >= min_b):
+            raise OptimiserStepError("QA root search failed")
+
+        logger.info(f"Calculated QA λ = {res.root:.4f}")
+        return shifted_newton_step(
+            self._coords.h, self._coords.g, res.root, check=True
+        )
+
+
+class QAOptimiserOLD(CRFOptimiserOLD):
     """Quadratic trust-radius optimiser in delocalised internal coordinates"""
 
     def _step(self) -> None:

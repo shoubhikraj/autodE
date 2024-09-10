@@ -350,6 +350,9 @@ class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
         if np.abs(self._last_pred_de) < 1.0e-8:
             return None
 
+        # TODO fix the logic here, always print the trust radius
+        # does it matter if energy rises if surface is quadratic
+
         # only reduce if energy rises too much
         if self.last_energy_change > PotentialEnergy(7, "kcalmol"):
             self._trust = max(0.7, self._trust, MIN_TRUST)
@@ -374,6 +377,11 @@ class QuadraticMinimiser(QuadraticOptimiserBase, ABC):
             pass
         elif 1.75 < trust_ratio:
             self._trust = min(0.9 * self._trust, MIN_TRUST)
+
+        logger.info(
+            f"Ratio of actual/predicted dE = {trust_ratio:.3f},"
+            f" Current trust radius = {self._trust:.3f}"
+        )
 
         return None
 
@@ -447,7 +455,7 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
         )
 
         if trust_ratio < 0.25:
-            self._trust = max(0.8 * self._trust, MIN_TRUST)
+            self._trust = max(0.7 * self._trust, MIN_TRUST)
         elif 0.25 <= trust_ratio <= 0.5:
             self._trust = max(0.95 * self._trust, MIN_TRUST)
         elif 0.5 < trust_ratio < 0.75:
@@ -461,7 +469,12 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
         elif 1.25 <= trust_ratio <= 1.75:
             self._trust = max(0.95 * self._trust, MIN_TRUST)
         elif 1.75 < trust_ratio:
-            self._trust = max(0.8 * self._trust, MIN_TRUST)
+            self._trust = max(0.7 * self._trust, MIN_TRUST)
+
+        logger.info(
+            f"Ratio of actual/predicted dE = {trust_ratio:.3f},"
+            f" Current trust radius = {self._trust:.3f}"
+        )
 
         return None
 
