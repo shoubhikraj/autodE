@@ -5,11 +5,62 @@ from typing import Union, Optional
 from autode.log import logger
 from autode.values import Distance
 from autode.opt.optimisers.crfo import CRFOptimiserOLD
+from autode.opt.optimisers.quadratic import QuadraticTSOptimiser
 from autode.opt.optimisers.hessian_update import BofillUpdate
 from autode.opt.coordinates.cartesian import CartesianCoordinates
 
 
-class PRFOptimiser(CRFOptimiserOLD):
+class PRFOptimiser(QuadraticTSOptimiser):
+    """TS optimisation with partioned RFO step"""
+
+    def _get_quadratic_step(self) -> np.ndarray:
+        """P-RFO step"""
+        assert self._coords is not None
+        assert self._coords.g is not None and self._coords.h is not None
+
+        b, u = np.linalg.eigh(self._coords.h)
+        f = u.T.dot(self._coords.g)
+        n_negative = sum(ev < 0 for ev in b)
+        logger.info(
+            f"∇^2E has {n_negative} negative eigenvalue(s). Should have 1"
+        )
+        imag_idx = self._get_imag_mode_idx(u)
+        logger.info(f"Following mode {imag_idx} uphill")
+
+        b_max = b[imag_idx]
+        u_max = u[:, imag_idx]
+        f_max = f[imag_idx]
+
+        b_min = np.delete(b, imag_idx)
+        u_min = np.delete(u, imag_idx, axis=1)
+        f_min = np.delete(f, imag_idx)
+
+        n = len(b)
+        delta_s = np.zeros(shape=(n,))
+        # downhill step
+        aug_h_min = np.zeros(shape=(n, n))
+        aug_h_min[: n - 1, : n - 1] = np.diag(b_min)
+        aug_h_min[:-1, -1] = aug_h_min[-1, :-1] = f_min
+        lambda_n = np.linalg.eigvalsh(aug_h_min)[0]
+        logger.info(f"Calculated λ_n = {lambda_n:.6f}")
+
+        for i in range(n - 1):
+            delta_s -= f_min[i] * u_min[:, i] / (b_min[i] - lambda_n)
+
+        # uphill step
+        aug_h_max = np.zeros(shape=(2, 2))
+        aug_h_max[:1, :1] = b_max
+        aug_h_max[:-1, -1] = aug_h_max[-1, :-1] = f_max
+        lambda_p = np.linalg.eigvalsh(aug_h_max)[-1]
+        logger.info(f"Calculated λ_p = {lambda_p:.6f}")
+
+        delta_s -= f_max * u_max / (b_max - lambda_p)
+
+        self._last_eigvec = u[:, imag_idx].flatten()
+        return delta_s
+
+
+class PRFOptimiserOLD(CRFOptimiserOLD):
     def __init__(
         self,
         init_alpha: Union[Distance, float] = 0.05,

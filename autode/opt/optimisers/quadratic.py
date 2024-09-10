@@ -466,7 +466,7 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
                 new_trust = min(1.05 * self._trust, MAX_TRUST)
         elif 1.25 < trust_ratio < 1.5:
             pass
-        elif 1.25 <= trust_ratio <= 1.75:
+        elif 1.5 <= trust_ratio <= 1.75:
             new_trust = max(0.95 * self._trust, MIN_TRUST)
         elif 1.75 < trust_ratio:
             new_trust = max(0.7 * self._trust, MIN_TRUST)
