@@ -57,6 +57,8 @@ class PRFOptimiser(QuadraticTSOptimiser):
         delta_s -= f_max * u_max / (b_max - lambda_p)
 
         self._last_eigvec = u[:, imag_idx].flatten()
+        if np.linalg.norm(delta_s) > self._trust:
+            delta_s *= self._trust / np.linalg.norm(delta_s)
         return delta_s
 
 

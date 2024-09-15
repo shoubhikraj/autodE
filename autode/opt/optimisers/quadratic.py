@@ -31,8 +31,8 @@ if TYPE_CHECKING:
     from autode.hessians import Hessian
 
 
-MAX_TRUST = 0.2
-MIN_TRUST = 0.01
+MAX_TRUST = 0.3
+MIN_TRUST = 0.05
 
 
 class _InitHessStrategy(Enum):

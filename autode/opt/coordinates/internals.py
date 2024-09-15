@@ -570,6 +570,7 @@ def _connect_graph_for_species(mol: "Species") -> None:
             if len(connections) >= 0:
                 for pair in connections:
                     mol.graph.add_edge(*pair, pi=False, active=False)
+                print(connections)
                 continue
             # otherwise connect the minimum distance bond
             min_dist = float("inf")
