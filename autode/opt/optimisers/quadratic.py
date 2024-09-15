@@ -272,10 +272,12 @@ class QuadraticOptimiserBase(NDOptimiser, ABC):
         Rebuild the coordinates, and reset variables that depend on the
         old set of coordinates
         """
+        old_e = self._coords.e
         old_x = self._coords.to("cart", transform_h=True)
         tmp_spc = self._species.copy()
         tmp_spc.reset_graph()
         self._build_coordinates(tmp_spc)
+        self._coords.e = old_e
         self._coords.update_g_from_cart_g(old_x.g)
         self._coords.update_h_from_cart_h(old_x.h)
         self._last_pred_de = None
@@ -425,7 +427,7 @@ class QuadraticTSOptimiser(QuadraticOptimiserBase, ABC):
     def _reset_coordinates(self):
         """For TS optimisers, last eigenvector has to be reset as well"""
         # change the followed mode to the current coordinate system
-        _, u = np.linalg.eigvalsh(self._coords.h)
+        _, u = np.linalg.eigh(self._coords.h)
         self._mode_idx = self._get_imag_mode_idx(u)
         super()._reset_coordinates()
         self._last_eigvec = None

@@ -562,6 +562,16 @@ def _connect_graph_for_species(mol: "Species") -> None:
     if not mol.graph.is_connected:
         components = mol.graph.connected_components()
         for comp_i, comp_j in itertools.combinations(components, r=2):
+            # check for partial (TS) bonds
+            connections = []
+            for i, j in itertools.product(list(comp_i), list(comp_j)):
+                if mol.distance(i, j) < mol.eqm_bond_distance(i, j) * 2:
+                    connections.append((i, j))
+            if len(connections) >= 0:
+                for pair in connections:
+                    mol.graph.add_edge(*pair, pi=False, active=False)
+                continue
+            # otherwise connect the minimum distance bond
             min_dist = float("inf")
             min_pair = (-1, -1)
             for i, j in itertools.product(list(comp_i), list(comp_j)):
