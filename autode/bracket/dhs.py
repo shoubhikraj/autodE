@@ -762,3 +762,47 @@ class DHSGS(DHS):
         )
 
         return new_coord
+
+
+class DHSIDPP(DHS):
+    """
+    Dewar-Healy-Stewart method, augmented with IDPP interpolation
+    based steps
+    """
+
+    def _get_dhs_step(self, side: ImageSide) -> CartesianCoordinates:
+        """
+        Get a DHS-like step from an IDPP path
+
+        Args:
+            side:
+
+        Returns:
+
+        """
+        from autode.neb import NEB
+        from autode.path.interpolation import CubicPathSpline
+
+        assert self._step_size is not None
+
+        left_spc = self._species.copy()
+        left_spc.coordinates = self.imgpair.left_coords
+        right_spc = left_spc.copy()
+        right_spc.coordinates = self.imgpair.right_coords
+
+        interp = NEB.from_end_points(
+            left_spc, right_spc, num=int(self.imgpair.dist * 2 + 2)
+        )
+        path_spline = CubicPathSpline.from_species_list(interp.images)
+
+        # get coordinates step size length from the requested side
+        if side == ImageSide.left:
+            new_x = path_spline.integrate_upto_length(float(self._step_size))
+        else:
+            path_length = path_spline.path_integral()
+            new_x = path_spline.integrate_upto_length(
+                path_length - float(self._step_size)
+            )
+
+        new_coords = CartesianCoordinates(path_spline.coords_at(new_x))
+        return new_coords
