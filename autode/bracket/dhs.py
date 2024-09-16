@@ -791,7 +791,7 @@ class DHSIDPP(DHS):
         right_spc.coordinates = self.imgpair.right_coords
 
         interp = NEB.from_end_points(
-            left_spc, right_spc, num=int(self.imgpair.dist * 2 + 2)
+            left_spc, right_spc, num=int(self.imgpair.dist * 2 + 4)
         )
         path_spline = CubicPathSpline.from_species_list(interp.images)
 
