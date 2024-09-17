@@ -87,7 +87,7 @@ class DistanceConstrainedOptimiser(RFOptimiser):
         """Initialise self._coords, gradient and hessian"""
         assert self._species is not None, "Must have a species to init run"
 
-        self._coords = CartesianCoordinates(self._species.coordinates)
+        self._coords = CartesianTRCoordinates(self._species.coordinates)
         self._target_dist = np.linalg.norm(self.dist_vec)
         self._update_gradient_and_energy()
 
