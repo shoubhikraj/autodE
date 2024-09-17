@@ -1,4 +1,5 @@
 import numpy as np
+import scipy
 from typing import Optional, List, TYPE_CHECKING
 
 from autode.log import logger
@@ -9,6 +10,9 @@ from autode.opt.coordinates.dic import DIC
 if TYPE_CHECKING:
     from autode.values import Gradient
     from autode.hessians import Hessian
+
+
+TR_SHIFT = 100.0  # shift factor for trans. rot. modes
 
 
 class CartesianCoordinates(OptCoordinates):
@@ -122,3 +126,89 @@ class CartesianCoordinates(OptCoordinates):
         """Expected number of degrees of freedom for the system"""
         n_atoms = len(self.flatten()) // 3
         return 3 * n_atoms - 6
+
+
+class CartesianTRCoordinates(CartesianCoordinates):
+    """
+    Cartesian coordinates that removes the translational and
+    rotational components from the gradient and Hessian
+    """
+
+    @property
+    def tr_vecs(self):
+        """
+        Obtain the translation and rotational vectors in orthonormal
+        format - returns 6 vectors for non-linear and 5 for linear
+        molecules
+
+        Returns:
+
+        """
+        # Ref.: Page, McIver, J. Chem. Phys., 1988, 88(2), 922
+        assert len(self) != 0 and len(self.shape) == 1
+        assert len(self) % 3 == 0
+        n_atoms = int(self.shape[0] / 3)
+        # Translation vectors
+        b_1 = np.tile([1.0, 0.0, 0.0], reps=n_atoms)
+        b_2 = np.tile([0.0, 1.0, 0.0], reps=n_atoms)
+        b_3 = np.tile([0.0, 0.0, 1.0], reps=n_atoms)
+        # Rotation vectors
+        b_4, b_5, b_6 = [np.zeros_like(b_1) for _ in range(3)]
+        for idx in range(n_atoms):
+            coord_x = self[3 * idx]
+            coord_y = self[3 * idx + 1]
+            coord_z = self[3 * idx + 2]
+            b_4[3 * idx : 3 * idx + 3] = [0.0, coord_z, -coord_y]
+            b_5[3 * idx : 3 * idx + 3] = [-coord_z, 0.0, coord_x]
+            b_6[3 * idx : 3 * idx + 3] = [coord_y, -coord_x, 0.0]
+        b = np.zeros(shape=(3 * n_atoms, 6))
+        for i, arr in enumerate([b_1, b_2, b_3, b_4, b_5, b_6]):
+            b[:, i] = arr
+
+        # get orthonormal basis from SVD, removes one mode if linear
+        v = scipy.linalg.orth(b, rcond=1.0e-5)
+        assert v.shape[1] in (5, 6)
+        return v
+
+    @property
+    def h(self):
+        """
+        Return the Hessian matrix with trans. and rot. modes frozen
+        """
+        if self._h is None:
+            return None
+
+        arr = self._h.copy()
+        tr_vecs = self.tr_vecs
+        for idx in range(tr_vecs.shape[1]):
+            vec = tr_vecs[:, idx].flatten()
+            arr += TR_SHIFT * np.outer(vec, vec)
+
+        return arr
+
+    @h.setter
+    def h(self, value):
+        """Set the value of h"""
+        raise NotImplementedError
+
+    @property
+    def g(self):
+        """
+        Obtain the gradient with trans. and rot. directions zeroed
+        """
+        if self._g is None:
+            return None
+
+        arr = self._g.copy()
+        # obtain the projection matrix
+        tr_vecs = self.tr_vecs
+        r_mat = np.matmul(tr_vecs, tr_vecs.T)
+        assert r_mat.shape[0] == r_mat.shape[1]
+        proj = np.eye(r_mat.shape[0]) - r_mat
+
+        arr = arr.ravel().reshape(-1, 1)
+        return np.matmul(proj, arr).flatten()
+
+    @g.setter
+    def g(self, value):
+        raise NotImplementedError
