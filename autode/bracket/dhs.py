@@ -12,6 +12,7 @@ from enum import Enum
 from autode.values import Distance, Angle, GradientRMS, PotentialEnergy
 from autode.bracket.imagepair import EuclideanImagePair
 from autode.opt.coordinates import CartesianCoordinates
+from autode.opt.coordinates.cartesian import CartesianTRCoordinates
 from autode.opt.optimisers.utils import TruncatedTaylor
 from autode.opt.optimisers.hessian_update import BFGSSR1Update
 from autode.bracket.base import BaseBracketMethod
@@ -628,7 +629,7 @@ class DHS(BaseBracketMethod):
         )
 
         # put results back into imagepair
-        self.imgpair.put_coord_by_side(opt.final_coordinates, side)  # type: ignore
+        self.imgpair.put_coord_by_side(opt.final_coordinates.to("cart"), side)  # type: ignore
         opt.clean_up()
         return None
 

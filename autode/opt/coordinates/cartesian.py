@@ -212,3 +212,12 @@ class CartesianTRCoordinates(CartesianCoordinates):
     @g.setter
     def g(self, value):
         raise NotImplementedError
+
+    def to(self, value):
+        """Convert to type"""
+        if value in ["cart", "cartesian"]:
+            new_coords = CartesianCoordinates(np.array(self))
+            new_coords.e = self.e
+            new_coords.g = self._g
+            new_coords.h = self._h
+            return new_coords
