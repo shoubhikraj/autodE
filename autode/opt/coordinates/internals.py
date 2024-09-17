@@ -192,6 +192,23 @@ class PIC(list, ABC):
 
         return B
 
+    def get_dB_dX(self, x: np.ndarray) -> np.ndarray:
+        """Calculate dB/dX i.e. the derivative of Wilson B matrix"""
+
+        if len(self) == 0:
+            raise ValueError(
+                "Cannot calculate the dB/dX matrix, no "
+                "primitive internal coordinates"
+            )
+        cart_coords = x.ravel()
+        n = len(cart_coords)
+        dB_dX = np.zeros(shape=(len(self), n, n))
+
+        for i, primitive in enumerate(self):
+            dB_dX[i] = primitive.second_derivative(x=cart_coords)
+
+        return dB_dX
+
     @staticmethod
     def _are_all_primitive_coordinates(args: tuple) -> bool:
         return all(isinstance(arg, Primitive) for arg in args)
