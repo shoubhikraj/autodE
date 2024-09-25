@@ -177,10 +177,26 @@ class DIC(InternalCoordinates):  # lgtm [py/missing-equals]
             # NOTE: This is not the full transformation as noted in
             # 10.1063/1.471864 only an approximate Hessian is required(?)
 
-            # calculate dB/dX terms TODO: double-check values
-            dBprim_dX = self.primitives.get_dB_dX(x=self._x)
-            dB_dX = np.tensordot(self.U, dBprim_dX, axes=(0, 0))
-            arr = arr - np.dot(self._g, dB_dX)  # TODO!!!
+            if self._g is not None:
+                dBprim_dX = self.primitives.get_dB_dX(x=self._x)
+                dB_dX = np.einsum("ji,jkl->ikl", self.U, dBprim_dX)
+                arr = arr - np.einsum("i,ijk->jk", self._g, dB_dX)
+
+            """
+            Above code is equivalent to -
+
+            dB_dX = np.zeros(
+                shape=(self.U.shape[1], self._x.shape[0], self._x.shape[0])
+            )
+            for i in range(self.U.shape[1]):  # each DIC
+                for j in range(self.U.shape[0]):  # each primitive
+                    dB_dX[i] += self.U[j, i] * dBprim_dX[j]
+
+            K = np.zeros_like(self._x)
+            for i in range(dic._g.shape[0]):
+                K += dic._g[i] * dB_dX[i]
+            arr = arr - K
+            """
             hess = np.linalg.multi_dot((self.B_T_inv.T, arr, self.B_T_inv))
 
             assert self.h_or_h_inv_has_correct_shape(hess)
