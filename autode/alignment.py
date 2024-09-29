@@ -66,7 +66,9 @@ def align_rct_prod(
     product.reorder_atoms(mapping={u: v for v, u in init_map.items()})
 
     core_idxs = get_rxn_core_indices(reactant, bond_rearr)
-    core_mapping = align_on_idxs(reactant, product, rct_rearr_graph, core_idxs)
+    core_mapping = get_aligned_mapping_on_core(
+        reactant, product, rct_rearr_graph, core_idxs
+    )
 
     return None
 
@@ -74,11 +76,26 @@ def align_rct_prod(
 MAX_MAPS = 50
 
 
-def align_on_idxs(rct, prod, mol_graph, heavy_idxs):
-    """Graph automorphism to align on a set of indices"""
+def get_aligned_mapping_on_core(rct, prod, mol_graph, core_idxs):
+    """
+    Align the reactant and product using the 'core' part of the
+    graph. Assumes reactant and product have been initially mapped
+    once. Checks all possible isomorphism mappings on the core
+    part, and returns the one with lowest RMSD.
+
+    Args:
+        rct:
+        prod:
+        mol_graph:
+        core_idxs:
+
+    Returns:
+
+    """
+    # TODO automorphism over rct and also prod
     rct_coords = rct.coordinates
     prod_coords = prod.coordinates
-    subgraph = mol_graph.subgraph(heavy_idxs)
+    subgraph = mol_graph.subgraph(core_idxs)
 
     node_match = isomorphism.categorical_node_match("atom_label", "C")
     gm = isomorphism.GraphMatcher(subgraph, subgraph, node_match=node_match)
