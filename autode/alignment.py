@@ -33,12 +33,14 @@ def get_heavy_and_active_h_indices(
     # TODO: remove Hs not attached to rxn centre
 
 
-def get_heavy_active_h_indices(rct, bond_rearr):
-    """Obtain the indices of the heavy atoms and any active H atoms"""
-    # TODO: non-terminal H atoms?
+def get_rxn_core_indices(rct: ReactantComplex, bond_rearr):
+    """Obtain the core indices"""
+    assert rct.graph is not None
     idxs = set()
     for i in range(rct.n_atoms):
         if rct.atoms[i].label != "H":
+            idxs.add(i)
+        elif rct.graph.degree[i] > 1:  # non-terminal H's
             idxs.add(i)
         if i in bond_rearr.active_atoms:
             idxs.add(i)
@@ -58,39 +60,38 @@ def align_rct_prod(
     # Initial mapping will ensure the correct connectivity
     init_map = next(gm.isomorphisms_iter())
     prod.reorder_atoms(mapping={u: v for v, u in init_map.items()})
-    rxn_graph = rct_rearr_graph.copy()
-    for i, j in bond_rearr.all:
-        rxn_graph.add_edge(i, j, pi=False, active=True)
 
-    heavy_idxs = get_heavy_active_h_indices(rct, bond_rearr)
-    align_on_idxs(rct, prod, rxn_graph, heavy_idxs)
+    core_idxs = get_rxn_core_indices(rct, bond_rearr)
+    core_mapping = align_on_idxs(rct, prod, rct_rearr_graph, core_idxs)
+
     return rct, prod
 
 
-def align_on_idxs(rct, prod, rxn_graph, heavy_idxs):
+MAX_MAPS = 50
+
+
+def align_on_idxs(rct, prod, mol_graph, heavy_idxs):
     """Graph automorphism to align on a set of indices"""
     rct_coords = rct.coordinates
     prod_coords = prod.coordinates
-    subgraph = rxn_graph.subgraph(heavy_idxs)
+    subgraph = mol_graph.subgraph(heavy_idxs)
 
     node_match = isomorphism.categorical_node_match("atom_label", "C")
-    edge_match = isomorphism.categorical_edge_match("active", False)
-    gm = isomorphism.GraphMatcher(
-        subgraph, subgraph, node_match=node_match, edge_match=edge_match
-    )
+    gm = isomorphism.GraphMatcher(subgraph, subgraph, node_match=node_match)
 
     best_mapping = None
     best_rmsd = float("inf")
-    for mapping in gm.isomorphisms_iter():
+    for counter, mapping in enumerate(gm.isomorphisms_iter()):
         # TODO: check if the order is correct! probably wrong!!!
         rct_idxs, prod_idxs = zip(*mapping.items())
         rmsd = calc_rmsd(rct_coords[rct_idxs], prod_coords[prod_idxs])
         if rmsd < best_rmsd:
             best_mapping = mapping
             best_rmsd = rmsd
-        # TODO add maximum number of isomorphisms returned
+        if counter > MAX_MAPS:
+            break
 
     if best_mapping is None:
         raise Exception
 
-    pass
+    return best_mapping
