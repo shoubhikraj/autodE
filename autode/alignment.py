@@ -2,7 +2,11 @@
 Align reactants and products to each other using graph isomorphism
 """
 import itertools
+import numpy as np
 from typing import TYPE_CHECKING, List
+from scipy.spatial.distance import cdist
+from scipy.optimize import linear_sum_assignment
+
 from autode.transition_states.locate_tss import translate_rotate_reactant
 from autode.mol_graphs import reac_graph_to_prod_graph
 from autode.bond_rearrangement import BondRearrangement
@@ -118,8 +122,23 @@ def match_non_core_h(rct, prod, h_idxs):
     assert len(reconstr_prod_idxs) == len(reconstr_rct_idxs) == len(h_idxs)
     assert set(reconstr_rct_idxs) == set(reconstr_prod_idxs)
 
+    assigned_map = {}
     for node in rct_nodes.keys():
-        pass
+        row_idxs = rct_nodes[node]
+        column_idxs = prod_nodes[node]
+        # TODO: check the distance matrix dimensions are in correct order
+        dist_matrix = cdist(
+            rct.coordinates[row_idxs], prod.coordinates[column_idxs]
+        )
+        row_ind, column_ind = linear_sum_assignment(dist_matrix)
+        # TODO: correct order??
+        node_h_map = zip(
+            list(np.array(row_idxs)[column_ind]),
+            list(np.array(column_idxs)[row_ind]),
+        )
+        assigned_map.update(dict(node_h_map))
+
+    return assigned_map
 
 
 def get_aligned_mapping_on_core(rct, prod, core_idxs):
