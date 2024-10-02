@@ -126,12 +126,11 @@ def match_non_core_h(rct, prod, h_idxs):
     for node in rct_nodes.keys():
         row_idxs = rct_nodes[node]
         col_idxs = prod_nodes[node]
-        # TODO: check the distance matrix dimensions are in correct order
+        # TODO: check once by debugging
         dist_matrix = cdist(
             rct.coordinates[row_idxs], prod.coordinates[col_idxs]
         )
         row_ind, col_ind = linear_sum_assignment(dist_matrix)
-        # TODO: correct order??
         node_h_map = zip(
             list(np.array(row_idxs)[row_ind]),
             list(np.array(col_idxs)[col_ind]),
