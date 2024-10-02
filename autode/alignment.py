@@ -214,7 +214,9 @@ def get_aligned_mapping_on_core(rct, prod, core_idxs):
             break
         # TODO: check if the order is correct!
         rct_idxs, prod_idxs = zip(*mapping.items())
-        rmsd = calc_rmsd(rct_coords[rct_idxs], prod_coords[prod_idxs])
+        rmsd = calc_rmsd(
+            rct_coords[list(rct_idxs)], prod_coords[list(prod_idxs)]
+        )
         if rmsd < best_rmsd:
             best_mapping = mapping
             best_rmsd = rmsd
