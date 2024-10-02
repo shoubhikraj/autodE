@@ -10,7 +10,7 @@ from scipy.optimize import linear_sum_assignment
 from autode.transition_states.locate_tss import translate_rotate_reactant
 from autode.mol_graphs import reac_graph_to_prod_graph
 from autode.bond_rearrangement import BondRearrangement
-from autode.geom import calc_rmsd
+from autode.geom import calc_rmsd, get_rot_mat_kabsch
 from autode.species.complex import ReactantComplex
 from networkx import isomorphism
 
@@ -82,7 +82,43 @@ def align_rct_prod(
     for k in other_idxs:
         dummy_full_map[k] = k
     product.reorder_atoms(mapping={u: v for v, u in dummy_full_map.items()})
-    # TODO: have to RMSD minimise on core mapping
+    rigid_body_align_on_idxs(reactant, product, core_idxs)
+    h_map = match_non_core_h(reactant, product, other_idxs)
+    full_map = h_map.copy()
+    for k in core_idxs:
+        full_map[k] = k
+    product.reorder_atoms(mapping={u: v for v, u in full_map.items()})
+    return None
+
+
+def rigid_body_align_on_idxs(mol1, mol2, idxs):
+    """
+    Perform rigid-body alignment on two mo
+
+    Args:
+        mol1:
+        mol2:
+        idxs:
+
+    Returns:
+
+    """
+    coords1 = mol1.coordinates
+    coords2 = mol2.coordinates
+    assert coords1.shape == coords2.shape
+    assert coords1.shape[1] == 3
+
+    p_mat = np.array(coords1[idxs])
+    coords1 = coords1 - np.average(p_mat, axis=0)
+
+    q_mat = np.array(coords2[idxs])
+    coords2 = coords2 - np.average(q_mat, axis=0)
+
+    rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
+    coords1 = np.dot(rot_mat, coords1.T).T
+
+    mol1.coordinates = coords1
+    mol2.coordinates = coords2
 
     return None
 
