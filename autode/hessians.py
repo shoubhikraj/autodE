@@ -196,31 +196,34 @@ class Hessian(ValueArray):
         if self.atoms is None:
             raise ValueError("Could generate projected Hessian. Atoms not set")
 
-        t1, t2, t3, t4, t5, t6 = self._tr_vecs()
+        tr_vecs = list(self._tr_vecs())
 
         # Construct M^1/2, which as it's diagonal, is just the roots of the
         # diagonal elements
         masses = np.repeat([atom.mass for atom in self.atoms], repeats=3)
         m_half = np.sqrt(masses)
 
-        for t_i in (t1, t2, t3, t4, t5, t6):
+        for t_i in tr_vecs:
             t_i *= m_half
 
-        # Generate a transform matrix D with the first columns as translation/
-        # rotation vectors with the remainder as random orthogonal columns
-        M = np.eye(3 * len(self.atoms))
+        # Generate a tranform matrix for the null-space of translation
+        # rotation using SVD
+        tr_bas = np.array(tr_vecs).transpose()
+        U_s, s_v, _ = np.linalg.svd(tr_bas, full_matrices=True)
 
-        i = 0
-        for t_i in (t1, t2, t3, t4, t5, t6):
-            if not np.isclose(np.linalg.norm(t_i), 0):
-                M[:, i] = t_i
-                i += 1
-
-        return np.linalg.qr(M)[0]
+        if self.atoms.are_linear():
+            if s_v[5] / s_v[0] > 1.e-4:
+                logger.warning(
+                    f"Molecule detected as linear, but lowest singular value"
+                    f" from trans. and rot. basis is {s_v[5]:.4e}."
+                )
+            return U_s[:, 5:]
+        else:
+            return U_s[:, 6:]
 
     @cached_property
     def _mass_weighted(self) -> np.ndarray:
-        """Mass weighted the Hessian matrix
+        """Mass weighted Hessian matrix
 
                       H_ij
         H'_ij  =  ------------
@@ -229,16 +232,16 @@ class Hessian(ValueArray):
         if self.atoms is None:
             raise ValueError("Could not calculate frequencies. Atoms not set")
 
-        H = self.to("J ang^-2")
+        H = self.to("ha/ang^2")
         mass_array = np.repeat(
-            [atom.mass.to("kg") for atom in self.atoms],
+            [atom.mass.to("amu") for atom in self.atoms],
             repeats=3,
             axis=np.newaxis,
         )
 
         return np.array(
             H / np.sqrt(np.outer(mass_array, mass_array))
-        )  # J Å^-2 kg^-1
+        )  # Ha Å^-2 amu^-1
 
     @cached_property
     def _proj_mass_weighted(self) -> np.ndarray:
@@ -290,31 +293,11 @@ class Hessian(ValueArray):
                 " have atoms set"
             )
 
-        n_tr = self.n_tr  # Number of translational+rotational modes
-        n_v = self.n_v  # and the number of vibrations
-
-        _, S_bar = np.linalg.eigh(self._proj_mass_weighted[n_tr:, n_tr:])
-
-        # Re-construct the block matrix
-        S_prime = np.block(
-            [
-                [np.zeros((n_tr, n_tr)), np.zeros((n_tr, n_v))],
-                [np.zeros((n_v, n_tr)), S_bar],
-            ]
-        )
-
-        # then apply the back-transformation
-        modes = []
-        for i in range(n_tr + n_v):
-            mode = np.dot(self._proj_matrix, S_prime[:, i])
-
-            # only normalise the vibrations as the rotations/translations are 0
-            if i >= n_tr:
-                mode /= np.linalg.norm(mode)
-
-            modes.append(Coordinates(mode))
-
-        return modes
+        # Obtain projected eigenvectors and back-transform into
+        # the non-projected dimensions
+        _, proj_modes = np.linalg.eigh(self._proj_mass_weighted)
+        modes = np.matmul(self._proj_matrix, proj_modes)
+        return [Coordinates(mode / np.linalg.norm(mode)) for mode in modes.T]
 
     @property
     def _freq_scale_factor(self) -> float:
@@ -330,7 +313,7 @@ class Hessian(ValueArray):
 
     def _eigenvalues_to_freqs(self, lambdas) -> List[Frequency]:
         """
-        Convert eigenvalues of the Hessian matrix (SI units) to
+        Convert eigenvalues of the Hessian matrix (units of Ha Å^-2 amu^-1) to
         frequencies in wavenumber units. Will use ade.Config.freq_scale_factor
         to scale the frequencies.
 
@@ -341,8 +324,9 @@ class Hessian(ValueArray):
         Returns:
             (list(autode.values.Frequency)):
         """
-
-        nus = np.sqrt(np.complex128(lambdas)) / (
+        # TODO unit conversion
+        # TODO this is mass-weighted - should not add to coordinate directly
+        nus = np.sqrt(np.cdouble(lambdas)) / (
             2.0 * np.pi * Constants.ang_to_m * Constants.c_in_cm
         )
         nus *= self._freq_scale_factor
@@ -389,42 +373,10 @@ class Hessian(ValueArray):
                 "Could not calculate projected frequencies, must "
                 "have atoms set"
             )
-        n_tr = self.n_tr  # Number of translational+rotational modes
 
-        H = self._proj_mass_weighted
-        norms = np.linalg.norm(H, axis=0)
-        max_norm = np.max(norms)
-        n_zeroed_modes = 0  # Number of modes that have been well projected out of the hessian
-        for norm in norms:
-            if norm / max_norm > 0.1 or n_zeroed_modes == n_tr:
-                break
-            else:
-                n_zeroed_modes += 1
-
-        if n_zeroed_modes != n_tr:
-            logger.warn(
-                f"Number of well zeroed eigenvectors of the hessian "
-                f"was [{n_zeroed_modes}] should be [{n_tr}]"
-            )
-
-        lambdas = np.linalg.eigvalsh(H[n_zeroed_modes:, n_zeroed_modes:])
-        trans_rot_freqs = [Frequency(0.0) for _ in range(n_zeroed_modes)]
-        vib_freqs = self._eigenvalues_to_freqs(lambdas)
-
-        n_rotational_modes_in_vib_freqs = n_tr - n_zeroed_modes
-        for i in np.argsort(np.abs(np.array(vib_freqs))):
-            freq = vib_freqs[i]
-            if (
-                n_rotational_modes_in_vib_freqs > 0
-                and freq.real < THRESHOLD_ROTATION_FREQ
-            ):
-                logger.warning(
-                    "Found a vibrational mode that should be a rotation with "
-                    f"frequency [{freq}] cm-1. Forcing to zero"
-                )
-                vib_freqs[i] = Frequency(0.0)
-                n_rotational_modes_in_vib_freqs -= 1
-
+        lmdas = np.linalg.eigvalsh(self._proj_mass_weighted)
+        vib_freqs = self._eigenvalues_to_freqs(lmdas)
+        trans_rot_freqs = [Frequency(0.0) for _ in range(self.n_tr)]
         return trans_rot_freqs + vib_freqs
 
     def copy(self, *args, **kwargs) -> "Hessian":
