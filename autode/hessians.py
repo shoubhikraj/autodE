@@ -313,9 +313,9 @@ class Hessian(ValueArray):
 
     def _eigenvalues_to_freqs(self, lambdas) -> List[Frequency]:
         """
-        Convert eigenvalues of the Hessian matrix (units of Ha Å^-2 amu^-1) to
-        frequencies in wavenumber units. Will use ade.Config.freq_scale_factor
-        to scale the frequencies.
+        Convert eigenvalues of the mass-weighted Hessian matrix (units of
+        Ha Å^-2 amu^-1) to frequencies in wavenumber units. Will use
+        ade.Config.freq_scale_factor to scale the frequencies.
 
         -----------------------------------------------------------------------
         Arguments:
@@ -324,10 +324,13 @@ class Hessian(ValueArray):
         Returns:
             (list(autode.values.Frequency)):
         """
-        # TODO unit conversion
         # TODO this is mass-weighted - should not add to coordinate directly
-        nus = np.sqrt(np.cdouble(lambdas)) / (
-            2.0 * np.pi * Constants.ang_to_m * Constants.c_in_cm
+        # Cast to SI units (J m^-2 kg^-1)
+        evs = np.array(lambdas) * (
+            Constants.ha_to_J / (Constants.ang_to_m ** 2) / Constants.amu_to_kg
+        )
+        nus = np.sqrt(np.cdouble(evs)) / (
+            2.0 * np.pi * Constants.c_in_cm
         )
         nus *= self._freq_scale_factor
 
