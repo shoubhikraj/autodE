@@ -9,6 +9,7 @@ from scipy.optimize import linear_sum_assignment
 
 from autode.transition_states.locate_tss import translate_rotate_reactant
 from autode.mol_graphs import reac_graph_to_prod_graph
+from autode.species import Complex
 from autode.bond_rearrangement import BondRearrangement
 from autode.geom import calc_rmsd, get_rot_mat_kabsch
 from autode.species.complex import ReactantComplex
@@ -49,14 +50,57 @@ def get_rxn_core_indices(
     return list(idxs)
 
 
-def align_rct_prod(
+def orient_reactant_product_complexes(
+    reactant: "Species", product: "Species", bond_rearr: "BondRearrangement"
+):
+    """
+    Reorients reactant and product if they are complexes with 2
+    components.
+
+    Args:
+        reactant: The reactant molecule/complex
+        product: The product molecule/complex
+        bond_rearr: Bond rearrangement for reaction
+    """
+    if isinstance(reactant, Complex):
+        if reactant.n_molecules > 2:
+            raise NotImplementedError(
+                "Complexes with more than 2 components not supported"
+            )
+
+        translate_rotate_reactant(
+            reactant,
+            bond_rearr,
+            shift_factor=1.5 if reactant.charge == 0 else 2.5,
+            n_iters=20,
+        )
+
+    inv_bond_rearr = BondRearrangement(
+        forming_bonds=bond_rearr.bbonds, breaking_bonds=bond_rearr.fbonds
+    )
+    if isinstance(product, Complex):
+        if product.n_molecules > 2:
+            raise NotImplementedError(
+                "Complexes with more than 2 components not supported"
+            )
+
+        translate_rotate_reactant(
+            product,
+            inv_bond_rearr,
+            shift_factor=1.5 if product.charge == 0 else 2.5,
+            n_iters=20,
+        )
+    return None
+
+
+def align_map_rct_prod(
     reactant: "Species", product: "Species", bond_rearr: "BondRearrangement"
 ):
     """
     Align the reactant and product using their graphs, and the given
     bond rearrangement. First aligns the 'core' atoms (excluding terminal
     hydrogen atoms) and then the remaining H atoms. Modifies the reactant
-    and product objects in-place with the best mapping.
+    and product objects in-place by aligning if necessary and then mapping.
 
     Args:
         reactant: The reactant molecule/complex
@@ -72,6 +116,8 @@ def align_rct_prod(
     # Initial mapping will ensure the correct connectivity
     init_map = next(gm.isomorphisms_iter())
     product.reorder_atoms(mapping={u: v for v, u in init_map.items()})
+
+    # reorient multiple components if they are complexes
 
     core_idxs = get_rxn_core_indices(reactant, product, bond_rearr)
     core_map = get_aligned_mapping_on_core(reactant, product, core_idxs)
