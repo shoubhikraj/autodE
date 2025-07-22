@@ -26,7 +26,7 @@ def forming_bonds_vdw_force_term(
         r_j_vdw = cmplx.atoms[j].vdw_radius
         r0 = r_i_vdw + r_j_vdw
         r = cmplx.distance(i, j)
-        e_sum += k * (r - r0) ** 2
+        e_sum += k * (r - r0) ** 6
 
     return e_sum
 
@@ -38,8 +38,8 @@ def get_energy_rotate_translate(
     return_coords: bool = False,
 ):
     """
-    Get the 'energy' based on hard sphere 1/r^4 repulsion, and
-    1/r^2 attraction on the forming bonds. The first species
+    Get the 'energy' based on hard sphere r^4 repulsion, and
+    r^6 attraction on the forming bonds. The first species
     in the complex is always considered stationary.
 
 
@@ -76,9 +76,9 @@ def get_energy_rotate_translate(
         total_en += edited_cmplx.calc_repulsion(i)
     total_en = total_en / edited_cmplx.n_molecules
 
-    bond_terms = forming_bonds_vdw_force_term(cmplx, bond_rearr)
+    bond_term = forming_bonds_vdw_force_term(edited_cmplx, bond_rearr)
     if not return_coords:
-        return total_en + bond_terms
+        return total_en + bond_term
     else:
         return edited_cmplx.coordinates
 
