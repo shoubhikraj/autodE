@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from scipy.optimize import minimize
 from autode.species import Complex
@@ -26,7 +28,9 @@ def forming_bonds_vdw_force_term(
         r_j_vdw = cmplx.atoms[j].vdw_radius
         r0 = r_i_vdw + r_j_vdw
         r = cmplx.distance(i, j)
-        e_sum += k * (r - r0) ** 6
+        s = r0 / 1.414
+        e_sum -= 1 / r**4  # remove the repulsion term
+        e_sum += k * ((s / r) ** 4 - (s / r) ** 2)
 
     return e_sum
 
