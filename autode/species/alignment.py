@@ -6,6 +6,7 @@ from scipy.optimize import minimize
 from autode.species import Complex
 from autode.conformers import Conformers, Conformer
 from autode.bond_rearrangement import BondRearrangement
+from autode.geom import calc_rmsd
 
 
 def forming_bonds_vdw_force_term(
@@ -130,18 +131,25 @@ def create_aligned_complex_conformers(
 
 
 def prune_best_aligned_complex_conformers(
-    cmplx: Complex, bond_rearr: BondRearrangement
+    cmplx: Complex,
+    bond_rearr: BondRearrangement,
+    dtol_fac: float = 1.3,
+    rmsd_tol: float = 0.2,
 ):
     """
-    Prune the complexes based on distance criteria
+    Prune the complexes based on distance criteria, and also
+    on RMSD criteria
 
     Args:
         cmplx:
         bond_rearr:
+        dtol_fac:
+        rmsd_tol:
 
     Returns:
 
     """
+    # TODO have to decide some better distance criteria here
     fbonds = bond_rearr.fbonds
 
     if len(fbonds) == 0 or cmplx.n_conformers == 0:
@@ -157,10 +165,23 @@ def prune_best_aligned_complex_conformers(
     min_rms_bond_l = min(all_rms_bond_ls)
     new_conf_list = []
     for i, conf in enumerate(cmplx.conformers):
-        if all_rms_bond_ls[i] < min_rms_bond_l * 1.3:
+        if all_rms_bond_ls[i] < min_rms_bond_l * dtol_fac:
             new_conf_list.append(conf)
-    print(f"Pruned to {len(new_conf_list)} conformers")
-    cmplx.conformers = Conformers(new_conf_list)
+    print(
+        f"Pruned to {len(new_conf_list)} conformers based on " f"bond lengths"
+    )
+
+    rmsd_conf_list: list = []
+    for conf in new_conf_list:
+        if len(rmsd_conf_list) == 0:
+            rmsd_conf_list.append(conf)
+        elif all(
+            calc_rmsd(conf.coordinates, other.coordinates) > rmsd_tol
+            for other in rmsd_conf_list
+        ):
+            rmsd_conf_list.append(conf)
+    print(f"Pruned to {len(rmsd_conf_list)} conformers based on " f"RMSD")
+    cmplx.conformers = Conformers(rmsd_conf_list)
     return None
 
 
