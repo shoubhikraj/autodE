@@ -141,11 +141,10 @@ namespace autode {
             } else {  // equal energies
                 *tau = tau_p + tau_m;
             }
-            if (dv_max < 1e-14 && dv_min < 1e-14) { // sometimes dV are small
+            double tau_norm = arrx::norm_l2(*tau);
+            if (tau_norm < 1e-10) {  // sometimes dv_max, dv_min are small
                 *tau = tau_p + tau_m;
             }
-            double tau_norm = arrx::norm_l2(*tau);
-            ensure(tau_norm > 1e-10, "Failed to get tangent");
             *tau /= tau_norm;
         }
         return tau_p_norm * k_p1 - tau_m_norm * k_m1;
@@ -248,7 +247,7 @@ namespace autode {
         }
     }
 
-    void IDPPPotential::calc_idpp_engrad(const int idx, Image* img) const {
+    void IDPPPotential::calc_idpp_engrad(const int idx, Image& img) const {
         /* Calculate the IDPP energy/gradient for the
          * supplied image
          *
@@ -259,14 +258,14 @@ namespace autode {
          *        The image object is modified in-place
          */
         ensure(idx >= 0 && idx < n_images, "Index out of bounds");
-        ensure(img->coords.size() == n_atoms * 3
-               && img->grad.size() == img->coords.size(),
+        ensure(img.coords.size() == n_atoms * 3
+               && img.grad.size() == img.coords.size(),
             "Provided image does not have correct number of atoms");
 
         if (idx == 0 || idx == n_images - 1) return;
 
-        img->en = 0.0;
-        img->grad.fill(0.0);
+        img.en = 0.0;
+        img.grad.fill(0.0);
 
         // pointer to items of target_ds[idx]
         auto target_d_ptr = all_target_ds[idx].begin();
@@ -276,14 +275,14 @@ namespace autode {
             for (int atom_j = 0; atom_j < n_atoms; atom_j++) {
                 if (atom_i >= atom_j) continue;
                 auto coord_i = arrx::slice(
-                    img->coords, atom_i * 3, atom_i * 3 + 3
+                    img.coords, atom_i * 3, atom_i * 3 + 3
                 );
                 auto coord_j = arrx::slice(
-                    img->coords, atom_j * 3, atom_j * 3 + 3
+                    img.coords, atom_j * 3, atom_j * 3 + 3
                 );
                 arrx::noalias(dist_vec) = coord_i - coord_j;
                 double dist = arrx::norm_l2(dist_vec);
-                img->en += 1.0 / std::pow(dist, 4)
+                img.en += 1.0 / std::pow(dist, 4)
                                 * std::pow(*target_d_ptr - dist, 2);
 
                 auto grad_prefac = -2.0 * 1.0 / std::pow(dist, 4)
@@ -291,8 +290,8 @@ namespace autode {
                         - 4.0 * std::pow(*target_d_ptr, 2) / std::pow(dist, 6);
                 // gradient terms
                 dist_vec *= grad_prefac;
-                arrx::slice(img->grad, atom_i * 3, atom_i * 3 + 3) += dist_vec;
-                arrx::slice(img->grad, atom_j * 3, atom_j * 3 + 3) -= dist_vec;
+                arrx::slice(img.grad, atom_i * 3, atom_i * 3 + 3) += dist_vec;
+                arrx::slice(img.grad, atom_j * 3, atom_j * 3 + 3) -= dist_vec;
                 target_d_ptr++;
             }
         }
@@ -331,56 +330,6 @@ namespace autode {
         // Create the end point images
         this->images.at(0).coords = std::move(init_coords);
         this->images.at(n_images - 1).coords = std::move(final_coords);
-        this->images.at(0).active = true;
-        this->images.at(n_images - 1).active = true;
-    }
-
-    void NEB::update_and_min_step(const IDPPPotential& pot) {
-        /* Update the energies and gradients of all active images and
-         * take a single minimisation step.
-         */
-        for (int k = 0; k < n_images; k++) {
-            if (images[k].active) pot.calc_idpp_engrad(k, &(images[k]));
-        }
-        // NOTE: linear combination tangent for frontier images
-        if (images_prepared) {
-            for (int k = 1; k < n_images - 1; k++) {
-                ensure(images[k].active, "Image must be active");
-                images[k].update_neb_grad(
-                    images[k-1], images[k+1], false
-                );
-            }
-        } else {
-            for (int k = 1; k < n_images - 1; k++) {
-                if (! images[k].active) continue;
-                if (k == frontier.left || k == frontier.right) {
-                    images[k].update_neb_grad(images[k-1], images[k+1], true);
-                } else {
-                    images[k].update_neb_grad(images[k-1], images[k+1], false);
-                }
-            }
-        }
-        this->log_progress();
-
-        for (int k = 1; k < n_images - 1; k++) {
-            if (! images[k].active) continue;
-            images[k].min_step();
-        }
-    }
-
-    void NEB::log_progress() {
-        /* Log the energies and gradient */
-        if (!debug_pr) return;
-
-        double total_en = 0.0;
-        double max_g = 0.0;
-        for (int k = 0; k < n_images; k++) {
-            if (! images[k].active) continue;
-            total_en += images[k].en;
-            max_g = std::max(max_g, images[k].max_g());
-        }
-        std::cout << " Path energy = " << total_en << "  Max. grad = " << max_g
-                  << "\n";
     }
 
     void NEB::fill_linear_interp() {
@@ -407,62 +356,14 @@ namespace autode {
         int n_added = 4;
 
         while (n_added <= n_images) {
-
-            for (int it = 0; it < add_maxiter; it++) {
-                this->update_and_min_step(pot);
-                if (images[frontier.left].max_g() < add_maxgtol) {
-                    break;
-                }
-                if (images[frontier.right].max_g() < add_maxgtol) {
-                    break;
-                }
-                if (it == add_maxiter - 1 && debug_pr) {
-                    std::cout << " Warning, exceeded maxiter...\n";
-                }
-            }
-
-            int conv_idx;
-            if (images[frontier.left].max_g() < images[frontier.right].max_g()) {
-                conv_idx = frontier.left;
-            } else {
-                conv_idx = frontier.right;
-            }
+            auto opt = BBMinimiser(add_maxiter, add_maxgtol);
+            auto conv_idx = opt.min_frontier(*this, frontier, pot);
             if (n_added == n_images) break;
             this->add_image_next_to(conv_idx);
             n_added++;
         }
         this->reset_k_spr();
         images_prepared = true;
-    }
-
-    void NEB::minimise(const IDPPPotential& pot,
-                       const int maxiter,
-                       const double rmsgtol) {
-        /* Final minimisation of the NEB */
-        ensure(images_prepared, "Images must be populated!");
-        for (int it = 0; it < maxiter; it++) {
-            this->update_and_min_step(pot);
-            if (this->path_rmsg() < rmsgtol) {
-                break;
-            }
-            if (it == maxiter - 1 && debug_pr) {
-                std::cout << " Warning, exceeded maxiter...\n";
-            }
-        }
-    }
-
-    double NEB::path_rmsg() const {
-        /* Calculate the root mean square gradient of the NEB */
-        double sq_sum = 0.0;
-        size_t dim = images[0].coords.size();
-        for (int k = 0; k < n_images; k++) {
-            if (! images[k].active) continue;
-            for (int i = 0; i < dim; i++) {
-                sq_sum += images[k].grad[i] * images[k].grad[i];
-            }
-        }
-        sq_sum /= static_cast<double>(n_images * dim);
-        return std::sqrt(sq_sum);
     }
 
     double NEB::get_d_id() const {
@@ -491,10 +392,7 @@ namespace autode {
 
     void NEB::reset_k_spr() {
         /* Reset the spring constant to base value for all images */
-        for (int k = 0; k < n_images; k++) {
-            images[k].k_m1 = this->k_spr;
-            images[k].k_p1 = this->k_spr;
-        }
+        for (int k = 0; k < n_images; k++) images[k].k_spr = this->k_spr;
     }
 
     void NEB::get_engrad(double& en, arrx::array1d& grad) const {
@@ -618,10 +516,10 @@ namespace autode {
         frontier.right = n_images - 2;
         // set force constants
         auto k_mid = this->get_k_mid();
-        images[frontier.left].k_m1 = k_spr;
-        images[frontier.left].k_p1 = k_mid;
-        images[frontier.right].k_m1 = k_mid;
-        images[frontier.right].k_p1 = k_spr;
+        for (int k = 0; k < n_images; k++) {
+            images[k].k_spr
+                  = (k == frontier.left || k == frontier.right) ? k_mid : k_spr;
+        }
     }
 
     void NEB::add_image_next_to(const int idx) {
@@ -640,7 +538,7 @@ namespace autode {
                                                               << idx+1 << "\n";
             arrx::array1d tau;
             images[frontier.left].get_tau_k_fac(
-                &tau, images[frontier.left-1], images[frontier.right], true
+                tau, images[frontier.left-1], images[frontier.right], true
             );
             arrx::noalias(images[frontier.left+1].coords) =
                 images[frontier.left].coords + tau * (d_id/arrx::norm_l2(tau));
@@ -650,7 +548,7 @@ namespace autode {
                                                               << idx-1 << "\n";
             arrx::array1d tau;
             images[frontier.right].get_tau_k_fac(
-                &tau, images[frontier.left], images[frontier.right+1], true
+                tau, images[frontier.left], images[frontier.right+1], true
             );
             arrx::noalias(images[frontier.right-1].coords) =
                 images[frontier.right].coords - tau * (d_id/arrx::norm_l2(tau));
@@ -659,16 +557,8 @@ namespace autode {
         // set force constants
         auto k_mid = this->get_k_mid();
         for (int k = 0; k < n_images; k++) {
-            if (k == frontier.left) {
-                images[k].k_m1 = k_spr;
-                images[k].k_p1 = k_mid;
-            } else if (k == frontier.right) {
-                images[k].k_m1 = k_mid;
-                images[k].k_p1 = k_spr;
-            } else {
-                images[k].k_m1 = k_spr;
-                images[k].k_p1 = k_spr;
-            }
+            images[k].k_spr
+                  = (k == frontier.left || k == frontier.right) ? k_mid : k_spr;
         }
     }
 
@@ -754,6 +644,96 @@ namespace autode {
         last_grad = grad;
         arrx::noalias(coords) = coords + step;
         n_backtrack = 0;  // reset on succesful step
+    }
+
+    int BBMinimiser::min_frontier(NEB& neb,
+                                  const NEB::frontier_pair idxs,
+                                  const IDPPPotential& pot) {
+        /* Minimise the frontier images of a NEB using the Barzilai-Borwein
+         * method
+         *
+         * Arguments:
+         *
+         *   neb: The NEB object holding the images
+         *   idxs: The pair of indices for the frontier
+         *
+         * Returns:
+         *   (int): The index of the image that converged. If did
+         *          not converge, the index of image with the lower
+         *          gradient is returned
+         */
+        ensure(idxs.left > 0 && idxs.right < neb.n_images - 1
+               && idxs.left < idxs.right, "Frontier indices are wrong");
+        if (debug_pr) std::cout << "=== Minimising frontier images: "
+                                << idxs.left << ", " << idxs.right << " ===\n";
+
+        while (iter < maxiter) {
+            pot.calc_idpp_engrad(idxs.left, neb.images[idxs.left]);
+            pot.calc_idpp_engrad(idxs.right, neb.images[idxs.right]);
+            neb.images[idxs.left].update_neb_grad(
+                neb.images[idxs.left - 1], neb.images[idxs.right], false
+            );
+            neb.images[idxs.right].update_neb_grad(
+                neb.images[idxs.left], neb.images[idxs.right + 1], false
+            );
+            neb.get_frontier_coords(coords);
+            neb.get_frontier_engrad(en, grad);
+            if (debug_pr)
+                std::cout << " Energies = (" << neb.images[idxs.left].en <<
+                            ", " << neb.images[idxs.right].en << ") RMS(g) = "
+                            << arrx::rms_v(grad) << "\n";
+            if (neb.images[idxs.left].max_g() < gtol
+                || neb.images[idxs.right].max_g() < gtol)
+            {
+                break;
+            }
+            this->take_step();
+            iter++;
+            neb.set_frontier_coords(coords);
+        }
+        if (iter == maxiter && debug_pr) {
+            std::cout << "Warning: exceeded max iterations\n";
+        }
+        if (neb.images[idxs.left].max_g() < neb.images[idxs.right].max_g()) {
+            return idxs.left;
+        } else {
+            return idxs.right;
+        }
+    }
+
+    void BBMinimiser::minimise_neb(NEB& neb, const IDPPPotential& pot) {
+        /* Minimise a series of NEB images using the IDPP potential
+         *
+         * Arguments:
+         *   neb: The NEB object
+         */
+        ensure(neb.images_prepared, "NEB images are not filled in");
+        if (debug_pr)
+            std::cout << "=== Minimising NEB path ===\n";
+
+        while (iter < maxiter) {
+            for (int k = 1; k < neb.n_images - 1; k++) {
+                pot.calc_idpp_engrad(k, neb.images[k]);
+            }
+            for (int k = 1; k < neb.n_images - 1; k++) {
+                neb.images[k].update_neb_grad(
+                    neb.images[k-1], neb.images[k+1], false
+                );
+            }
+            neb.get_coords(coords);
+            neb.get_engrad(en, grad);
+            auto curr_rms_g = arrx::rms_v(grad);
+            if (debug_pr) std::cout << " Path energy = " << en
+                                        << " RMS grad = " << curr_rms_g << "\n";
+            if (curr_rms_g < gtol) break;
+            this->take_step();
+            iter++;
+            neb.set_coords(coords);
+        }
+
+        if (iter == maxiter && debug_pr) {
+            std::cout << "Warning: exceeded max iterations\n";
+        }
     }
 
     void IdppParams::check_validity() const {

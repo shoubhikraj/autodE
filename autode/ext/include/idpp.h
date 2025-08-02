@@ -101,7 +101,7 @@ namespace autode
                                const arrx::array1d& final_coords,
                                const int num_images);
 
-        void calc_idpp_engrad(const int idx, Image* img) const;
+        void calc_idpp_engrad(const int idx, Image& img) const;
     };
 
     class NEB {
@@ -124,21 +124,11 @@ namespace autode
             double k_spr,
             int num_images);
 
-        void update_and_min_step(const IDPPPotential& pot);
-
-        void log_progress();
-
         void fill_linear_interp();
 
         void fill_sequentially(const IDPPPotential& pot,
                                const int add_maxiter,
                                const double add_maxgtol);
-
-        void minimise(const IDPPPotential& pot,
-                      const int maxiter,
-                      const double rmsgtol);
-
-        double path_rmsg() const;
 
         double get_d_id() const;
 
