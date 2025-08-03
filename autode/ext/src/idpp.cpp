@@ -316,7 +316,7 @@ namespace autode {
         int n_added = 4;
 
         while (n_added <= n_images) {
-            auto opt = BBMinimiser(add_maxiter, add_maxgtol);
+            auto opt = LBFGSMinimiser(add_maxiter, add_maxgtol);
             auto conv_idx = opt.min_frontier(*this, frontier, pot);
             if (n_added == n_images) break;
             this->add_image_next_to(conv_idx);
@@ -537,6 +537,49 @@ namespace autode {
         ensure(tol > 0, "Gradient tolerance must be positive");
     }
 
+    void LBFGSMinimiser::calc_lbfgs_step() {
+        /* Calculate the LBFGS step */
+        arrx::array1d s_k = coords - last_coords;
+        arrx::array1d y_k = grad - last_grad;
+        auto s_dot_s = dot(s_k, s_k);
+        if (s_dot_s < 1e-8) throw std::runtime_error("s_k . s_k is too small, cannot proceed");
+        auto t_k = 1.0 + std::max(-dot(y_k, s_k)/s_dot_s, 0.0);
+        //auto fac = std::max(-dot(y_k, s_k)/s_dot_s, 0.0) + 0.1 * arrx::norm_l2(grad);
+        arrx::noalias(y_k) = y_k + t_k * arrx::norm_l2(grad) * s_k;
+        //arrx::noalias(y_k) = y_k + fac * s_k;
+        s_ks.append(s_k);
+        y_ks.append(y_k);
+
+        const int n_vecs = s_ks.size();
+        auto y_dot_y = dot(y_k, y_k);
+        if (y_dot_y < 1e-8) throw std::runtime_error("y_k . y_k is too small, cannot proceed");
+        double gamma = dot(s_k, y_k) / y_dot_y;
+        step = grad;
+        arrx::array1d alpha = arrx::zeros(n_vecs);
+        arrx::array1d rho = arrx::zeros(n_vecs);
+        for (int i = n_vecs - 1; i >= 0; i--) {
+            rho[i] = 1 / dot(y_ks[i],s_ks[i]);
+            alpha[i] = rho[i] * dot(s_ks[i], step);
+            arrx::noalias(step) = step - alpha[i] * y_ks[i];
+        }
+        step *= gamma; // TODO multiply or divide by gamma?
+        for (int i = 0; i < n_vecs; i++) {
+            double beta_ = rho[i] * dot(y_ks[i], step);  // avoid conflict with std::beta
+            arrx::noalias(step) = step + (alpha[i] - beta_) * s_ks[i];
+        }
+
+        step *= -1.0;
+        if (arrx::abs_max(step) > lbfgs_maxstep) {
+            step *= lbfgs_maxstep / arrx::abs_max(step);
+        }
+
+        auto proj = dot(step, grad);
+        if (proj > 0) {
+            std::cout << "Projection of LBFGS step on gradient is positive, reversing step\n";
+            step *= -1.0;
+        }
+    }
+
     void BBMinimiser::calc_bb_step() {
         /* Calculate the Barzilai-Borwein step */
         auto dx = coords - last_coords;
@@ -569,6 +612,15 @@ namespace autode {
         }
     }
 
+    void LBFGSMinimiser::calc_sd_step() {
+        /* Calculate the steepest descent step */
+        arrx::noalias(step) = -grad;
+        double max_step = arrx::abs_max(step);
+        if (max_step > sd_maxstep) {
+            step *= (sd_maxstep / max_step);
+        }
+    }
+
     void BBMinimiser::calc_sd_step() {
         /* Calculate the first, steepest decent step */
         arrx::noalias(step) = -grad;
@@ -578,12 +630,44 @@ namespace autode {
         }
     }
 
+    void LBFGSMinimiser::backtrack() {
+        /* If gradient is rising, backtrack to find a better step */
+        if (debug_pr) std::cout << "Gradient rising... backtracking\n";
+        arrx::noalias(step) = coords - last_coords;
+        arrx::noalias(coords) = coords - 0.6 * step;
+        n_backtrack++;
+    }
+
     void BBMinimiser::backtrack() {
         /* If energy is rising, backtrack to find a better step */
         if (debug_pr) std::cout << "Energy rising... backtracking\n";
         arrx::noalias(step) = coords - last_coords;
         arrx::noalias(coords) = coords - 0.6 * step;
         n_backtrack++;
+    }
+
+    void LBFGSMinimiser::take_step() {
+        /* Take a single optimiser step */
+        if (iter == 0) {
+            this->calc_sd_step();
+        } else {
+            auto old_rms_grad = arrx::rms_v(last_grad);
+            auto rms_grad = arrx::rms_v(grad);
+            if ((rms_grad - old_rms_grad) / old_rms_grad > 10e-2) { // 10% rise max.
+                this->backtrack();
+                if (n_backtrack > 6)
+                    throw std::runtime_error("Too many backtracks");
+                // backtracking changes coords already so return
+                return;
+            } else {
+                this->calc_lbfgs_step();
+            }
+        }
+        last_coords = coords;
+        last_en = en;
+        last_grad = grad;
+        arrx::noalias(coords) = coords + step;
+        n_backtrack = 0;  // reset on succesful step
     }
 
     void BBMinimiser::take_step() {
@@ -604,6 +688,50 @@ namespace autode {
         last_grad = grad;
         arrx::noalias(coords) = coords + step;
         n_backtrack = 0;  // reset on succesful step
+    }
+
+    int LBFGSMinimiser::min_frontier(NEB& neb,
+                                     const NEB::frontier_pair idxs,
+                                     const IDPPPotential& pot) {
+        /* Minimise frontier images of a NEB with LBGS method
+         */
+        ensure(idxs.left > 0 && idxs.right < neb.n_images - 1
+               && idxs.left < idxs.right, "Frontier indices are wrong");
+        if (debug_pr) std::cout << "=== Minimising frontier images: "
+                                << idxs.left << ", " << idxs.right << " ===\n";
+
+        while (iter < maxiter) {
+            pot.calc_idpp_engrad(idxs.left, neb.images[idxs.left]);
+            pot.calc_idpp_engrad(idxs.right, neb.images[idxs.right]);
+            neb.images[idxs.left].update_neb_grad(
+                neb.images[idxs.left - 1], neb.images[idxs.right], false
+            );
+            neb.images[idxs.right].update_neb_grad(
+                neb.images[idxs.left], neb.images[idxs.right + 1], false
+            );
+            neb.get_frontier_coords(coords);
+            neb.get_frontier_engrad(en, grad);
+            if (debug_pr)
+                std::cout << " Energies = (" << neb.images[idxs.left].en <<
+                            ", " << neb.images[idxs.right].en << ") RMS(g) = "
+                            << arrx::rms_v(grad) << "\n";
+            if (neb.images[idxs.left].max_g() < gtol
+                && neb.images[idxs.right].max_g() < gtol)
+            {
+                break;
+            }
+            this->take_step();
+            iter++;
+            neb.set_frontier_coords(coords);
+        }
+        if (iter == maxiter && debug_pr) {
+            std::cout << "Warning: exceeded max iterations\n";
+        }
+        if (neb.images[idxs.left].max_g() < neb.images[idxs.right].max_g()) {
+            return idxs.left;
+        } else {
+            return idxs.right;
+        }
     }
 
     int BBMinimiser::min_frontier(NEB& neb,
@@ -658,6 +786,36 @@ namespace autode {
             return idxs.left;
         } else {
             return idxs.right;
+        }
+    }
+
+    void LBFGSMinimiser::minimise_neb(NEB& neb, const IDPPPotential& pot) {
+        ensure(neb.images_prepared, "NEB images are not filled in");
+        if (debug_pr)
+            std::cout << "=== Minimising NEB path ===\n";
+
+        while (iter < maxiter) {
+            for (int k = 1; k < neb.n_images - 1; k++) {
+                pot.calc_idpp_engrad(k, neb.images[k]);
+            }
+            for (int k = 1; k < neb.n_images - 1; k++) {
+                neb.images[k].update_neb_grad(
+                    neb.images[k-1], neb.images[k+1], false
+                );
+            }
+            neb.get_coords(coords);
+            neb.get_engrad(en, grad);
+            auto curr_rms_g = arrx::rms_v(grad);
+            if (debug_pr) std::cout << " Path energy = " << en
+                                        << " RMS grad = " << curr_rms_g << "\n";
+            if (curr_rms_g < gtol) break;
+            this->take_step();
+            iter++;
+            neb.set_coords(coords);
+        }
+
+        if (iter == maxiter && debug_pr) {
+            std::cout << "Warning: exceeded max iterations\n";
         }
     }
 
@@ -753,7 +911,7 @@ namespace autode {
         }
 
         // relax the path
-        auto opt = BBMinimiser(params.maxiter, params.rmsgtol);
+        auto opt = LBFGSMinimiser(params.maxiter, params.rmsgtol);
         opt.minimise_neb(neb, pot);
         return neb;
     }
