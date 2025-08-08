@@ -121,7 +121,9 @@ def get_rot_mat_euler(
         theta = theta.to("rad")
 
     axis = np.asarray(axis)
-    axis = axis / np.linalg.norm(axis)  # Normalise
+    norm = np.linalg.norm(axis)
+    assert norm > 1e-10
+    axis = axis / norm  # Normalise
 
     a = np.cos(theta / 2.0)
     b, c, d = -axis * np.sin(theta / 2.0)

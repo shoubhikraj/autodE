@@ -1,93 +1,69 @@
 import itertools
 import math
-
 import numpy as np
 from scipy.optimize import minimize
+from scipy.spatial import distance_matrix
 from autode.species import Complex
 from autode.conformers import Conformers, Conformer
 from autode.bond_rearrangement import BondRearrangement
-from autode.geom import calc_rmsd
+from autode.geom import calc_rmsd, get_rot_mat_euler
 
 
-def forming_bonds_vdw_force_term(
-    cmplx: Complex, bond_rearr: BondRearrangement
-):
-    """
-    Return force terms on the bonds that are forming: k (x-x0)**2.
-    Here x0 is the ideal distance which is the sum of van der Waals
-    radii of the atoms.
+class R4Penalty:
+    """Calculate the penalty for a set of rotations and translations"""
 
-    Args:
-        cmplx:
-        bond_rearr:
+    def __init__(self, cmplx: Complex, bond_rearr):
+        self.orig_coords = cmplx.coordinates.reshape(-1, 3)
+        self.n_molecules = cmplx.n_molecules
+        fbonds = bond_rearr.fbonds
+        assert all(
+            isinstance(fbond[0], int) and isinstance(fbond[1], int)
+            for fbond in fbonds
+        )
+        self.fbonds = fbonds
+        self.vdw_radii = [
+            cmplx.atoms[i].vdw_radius + cmplx.atoms[j].vdw_radius
+            for i, j in self.fbonds
+        ]
+        self.sigmas = [r / (2 ** (1 / 6)) for r in self.vdw_radii]
+        self.idxs_list = [
+            np.array(cmplx.atom_indexes(i)) for i in range(self.n_molecules)
+        ]
 
-    Returns:
-        (float): The value of the force term
-    """
-    e_sum = 0.0
-    k = 1.0
-    for i, j in bond_rearr.fbonds:
-        r_i_vdw = cmplx.atoms[i].vdw_radius
-        r_j_vdw = cmplx.atoms[j].vdw_radius
-        r0 = r_i_vdw + r_j_vdw
-        r = cmplx.distance(i, j)
-        s = r0 / 1.414
-        e_sum -= 1 / r**4  # remove the repulsion term
-        e_sum += k * ((s / r) ** 4 - (s / r) ** 2)
+    def get_rotated_translated_coords(self, x):
+        new_coords = self.orig_coords.copy()
+        x = np.asarray(x)
+        assert x.shape == (6 * (self.n_molecules - 1),)
+        for i in range(1, self.n_molecules):
+            mol_coords = new_coords[self.idxs_list[i]]
+            old_origin = mol_coords.mean(axis=0)
+            mol_coords = mol_coords - old_origin
+            rot_mat = get_rot_mat_euler(axis=[1, 0, 0], theta=x[3 * i])
+            mol_coords = np.matmul(rot_mat, mol_coords.T).T
+            rot_mat = get_rot_mat_euler(axis=[0, 1, 0], theta=x[3 * i + 1])
+            mol_coords = np.matmul(rot_mat, mol_coords.T).T
+            rot_mat = get_rot_mat_euler(axis=[0, 0, 1], theta=x[3 * i + 2])
+            mol_coords = np.matmul(rot_mat, mol_coords.T).T
+            mol_coords += old_origin + x[3 * (i - 1) : 3 * i]
+            new_coords[self.idxs_list[i]] = mol_coords
+        return new_coords
 
-    return e_sum
-
-
-def get_energy_rotate_translate(
-    x: np.ndarray,
-    cmplx: Complex,
-    bond_rearr: BondRearrangement,
-    return_coords: bool = False,
-):
-    """
-    Get the 'energy' based on hard sphere r^4 repulsion, and
-    r^6 attraction on the forming bonds. The first species
-    in the complex is always considered stationary.
-
-
-    Args:
-        x:
-        cmplx:
-        bond_rearr:
-        return_coords:
-
-    Returns:
-
-    """
-    # Must have 6 DOF variables for each molecule
-    _x = x.ravel()
-    assert len(_x) == (cmplx.n_molecules - 1) * 6
-    assert cmplx.n_molecules > 1
-
-    edited_cmplx = cmplx.copy()
-    cmplx_coords = edited_cmplx.coordinates
-    for i in range(edited_cmplx.n_molecules):
-        # do not move first molecule
-        if i == 0:
-            continue
-        mol_idxs = edited_cmplx.atom_indexes(i)
-        mol_cog = cmplx_coords[mol_idxs].reshape(-1, 3).mean(axis=0)
-        theta_x, theta_y, theta_z = _x[i + 2 : i + 5]
-        edited_cmplx.rotate_mol([1, 0, 0], theta_x, i, mol_cog)
-        edited_cmplx.rotate_mol([0, 1, 0], theta_y, i, mol_cog)
-        edited_cmplx.rotate_mol([0, 0, 1], theta_z, i, mol_cog)
-        edited_cmplx.translate_mol(_x[i - 1 : i + 2], i)
-
-    total_en = 0.0
-    for i in range(edited_cmplx.n_molecules):
-        total_en += edited_cmplx.calc_repulsion(i)
-    total_en = total_en / edited_cmplx.n_molecules
-
-    bond_term = forming_bonds_vdw_force_term(edited_cmplx, bond_rearr)
-    if not return_coords:
-        return total_en + bond_term
-    else:
-        return edited_cmplx.coordinates
+    def vdw_r4_penalty_rotate_translate(self, x):
+        """x is numpy array with 6 * (cmplx.n_molecules - 1)"""
+        _k = 0.3
+        penalty = 0.0
+        new_coords = self.get_rotated_translated_coords(x)
+        for i, j in itertools.combinations(range(self.n_molecules), 2):
+            mol_i_coords = new_coords[self.idxs_list[i]]
+            mol_j_coords = new_coords[self.idxs_list[j]]
+            dist_mat = distance_matrix(mol_i_coords, mol_j_coords)
+            penalty += 0.5 * np.sum(np.power(dist_mat, -4))
+        # add van der Waals terms, remove r4 repulsion
+        for idx, (i, j) in enumerate(self.fbonds):
+            r = np.linalg.norm(new_coords[i] - new_coords[j])
+            r0 = self.vdw_radii[idx]
+            penalty += _k * (r - r0) ** 4
+        return penalty
 
 
 def create_aligned_complex_conformers(
@@ -113,19 +89,14 @@ def create_aligned_complex_conformers(
     for conf in cmplx.conformers:
         print("Minimized one conformer")
         cmplx.coordinates = conf.coordinates
+        penalty_func = R4Penalty(cmplx, bond_rearr)
         x0 = np.zeros(n_dof)
         res = minimize(
-            fun=get_energy_rotate_translate,
+            fun=penalty_func.vdw_r4_penalty_rotate_translate,
             x0=x0,
             method="l-bfgs-b",
-            args=(
-                cmplx,
-                bond_rearr,
-            ),
         )
-        conf.coordinates = get_energy_rotate_translate(
-            res.x, cmplx, bond_rearr, return_coords=True
-        )
+        conf.coordinates = penalty_func.get_rotated_translated_coords(res.x)
 
     return None
 
