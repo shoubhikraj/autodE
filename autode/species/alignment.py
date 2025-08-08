@@ -9,12 +9,27 @@ from autode.bond_rearrangement import BondRearrangement
 from autode.geom import calc_rmsd, get_rot_mat_euler
 
 
-class R4Penalty:
-    """Calculate the penalty for a set of rotations and translations"""
+class AlignmentPenalty:
+    """
+    Class for calculation of penalty function used to align molecules.
+    It puts 1/r^4 repulsion between all atom pairs between different
+    molecules, and (r-r0)**4 for the atom-pairs forming bonds
+    """
 
-    def __init__(self, cmplx: Complex, bond_rearr):
+    def __init__(self, cmplx: Complex, bond_rearr: BondRearrangement):
+        """
+        Create an object for calculating penalty with 1/r^4 repulsion
+        and (r-r0)^4 attraction. r0 is the sum of van der Waals radii
+        of the two atoms which will form a bond
+
+        Args:
+            cmplx: The complex with more than one molecule
+            bond_rearr: The bond rearrangement - only take into account
+                        the forming bonds
+        """
         self.orig_coords = cmplx.coordinates.reshape(-1, 3)
         self.n_molecules = cmplx.n_molecules
+        assert self.n_molecules > 1
         fbonds = bond_rearr.fbonds
         assert all(
             isinstance(fbond[0], int) and isinstance(fbond[1], int)
@@ -25,32 +40,68 @@ class R4Penalty:
             cmplx.atoms[i].vdw_radius + cmplx.atoms[j].vdw_radius
             for i, j in self.fbonds
         ]
-        self.sigmas = [r / (2 ** (1 / 6)) for r in self.vdw_radii]
         self.idxs_list = [
             np.array(cmplx.atom_indexes(i)) for i in range(self.n_molecules)
         ]
 
-    def get_rotated_translated_coords(self, x):
+    def get_rotated_translated_coords(self, x: np.ndarray) -> np.ndarray:
+        """
+        Return new coordinates by rotating and translating
+        molecules. We keep the first (0-th) molecule fixed,
+        and move all other molecules.
+
+        Args:
+            x: A numpy array with 6 * (n_molecules - 1) i.e.
+               6 numbers for each movable molecule. The first 3
+               numbers indicate movement vector for the centre of
+               geometry and the last 3 indicate rotation around
+               x, y and z axes
+
+        Returns:
+            (np.ndarray): New array of coordinates
+        """
         new_coords = self.orig_coords.copy()
         x = np.asarray(x)
         assert x.shape == (6 * (self.n_molecules - 1),)
+
         for i in range(1, self.n_molecules):
             mol_coords = new_coords[self.idxs_list[i]]
             old_origin = mol_coords.mean(axis=0)
+            # move to origin, rotate around x, y and z axes
             mol_coords = mol_coords - old_origin
-            rot_mat = get_rot_mat_euler(axis=[1, 0, 0], theta=x[3 * i])
+            rot_mat = get_rot_mat_euler(
+                axis=np.array([1.0, 0.0, 0.0]), theta=x[3 * i]
+            )
             mol_coords = np.matmul(rot_mat, mol_coords.T).T
-            rot_mat = get_rot_mat_euler(axis=[0, 1, 0], theta=x[3 * i + 1])
+            rot_mat = get_rot_mat_euler(
+                axis=np.array([0.0, 1.0, 0.0]), theta=x[3 * i + 1]
+            )
             mol_coords = np.matmul(rot_mat, mol_coords.T).T
-            rot_mat = get_rot_mat_euler(axis=[0, 0, 1], theta=x[3 * i + 2])
+            rot_mat = get_rot_mat_euler(
+                axis=np.array([0.0, 0.0, 1.0]), theta=x[3 * i + 2]
+            )
             mol_coords = np.matmul(rot_mat, mol_coords.T).T
+            # translate to old origin + the movement vector
             mol_coords += old_origin + x[3 * (i - 1) : 3 * i]
             new_coords[self.idxs_list[i]] = mol_coords
+
         return new_coords
 
-    def vdw_r4_penalty_rotate_translate(self, x):
-        """x is numpy array with 6 * (cmplx.n_molecules - 1)"""
-        _k = 0.3
+    def penalty_rotate_translate(self, x: np.ndarray) -> float:
+        """
+        Obtain the penalty function for a known rotation and translation
+        from the original coordinates. The first (zeroth) molecule
+        is kept fixed.
+
+        Args:
+            x (np.ndarray): 6 * (n_molecules - 1) array with six
+                    numbers for translation and rotation of each
+                    moveable molecule.
+
+        Returns:
+            (float): The penalty value
+        """
+        _k = 0.5
         penalty = 0.0
         new_coords = self.get_rotated_translated_coords(x)
         for i, j in itertools.combinations(range(self.n_molecules), 2):
@@ -58,7 +109,7 @@ class R4Penalty:
             mol_j_coords = new_coords[self.idxs_list[j]]
             dist_mat = distance_matrix(mol_i_coords, mol_j_coords)
             penalty += 0.5 * np.sum(np.power(dist_mat, -4))
-        # add van der Waals terms, remove r4 repulsion
+        # add 4th order attractive force
         for idx, (i, j) in enumerate(self.fbonds):
             r = np.linalg.norm(new_coords[i] - new_coords[j])
             r0 = self.vdw_radii[idx]
@@ -89,10 +140,10 @@ def create_aligned_complex_conformers(
     for conf in cmplx.conformers:
         print("Minimized one conformer")
         cmplx.coordinates = conf.coordinates
-        penalty_func = R4Penalty(cmplx, bond_rearr)
+        penalty_func = AlignmentPenalty(cmplx, bond_rearr)
         x0 = np.zeros(n_dof)
         res = minimize(
-            fun=penalty_func.vdw_r4_penalty_rotate_translate,
+            fun=penalty_func.penalty_rotate_translate,
             x0=x0,
             method="l-bfgs-b",
         )
