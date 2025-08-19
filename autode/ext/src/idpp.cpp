@@ -316,7 +316,7 @@ namespace autode {
         int n_added = 4;
 
         while (n_added <= n_images) {
-            auto opt = LBFGSMinimiser(add_maxiter, add_maxgtol);
+            auto opt = BBMinimiser(add_maxiter, add_maxgtol);
             auto conv_idx = opt.min_frontier(*this, frontier, pot);
             if (n_added == n_images) break;
             this->add_image_next_to(conv_idx);
@@ -672,17 +672,48 @@ namespace autode {
 
     void BBMinimiser::take_step() {
         /* Take a single optimiser step */
+        double maxstep;
         if (iter == 0) {
-            this->calc_sd_step();
-        } else if ((en - last_en) / last_en > 2e-2) { // allow 2% rise
-            this->backtrack();
-            if (n_backtrack > 6)
-                throw std::runtime_error("Too many backtracks");
-            // backtracking resets coords so must return
-            return;
+            step = -grad;
+            maxstep = sd_maxstep;
         } else {
-            this->calc_bb_step();
+            // must backtrack if energy is rising too much
+            if ((en - last_en) / last_en > 2e-2) {
+                this->backtrack();
+                return;
+            }
+            // TODO: make s_k, y_k permanent
+            arrx::array1d s_k = coords - last_coords;
+            arrx::array1d y_k = grad - last_grad;
+            auto s_dot_y = arrx::dot(s_k, y_k);
+            // also backtrack if secant condition is not fulfilled
+            // TODO: too many backtracks?
+            if (s_dot_y < 0) {
+                this->backtrack();
+                return;
+            }
+            double alpha;
+            auto y_dot_y = arrx::dot(y_k, y_k);
+            if (y_dot_y < 1e-8) {
+                alpha = s_dot_y / y_dot_y;  // short BB step
+                arrx::noalias(step) = -grad * alpha;
+                maxstep = bb_maxstep;
+            } else if (s_dot_y > 1e-8) {
+                alpha = arrx::dot(s_k, s_k) / s_dot_y;  // long BB step
+                arrx::noalias(step) = -grad * alpha;
+                maxstep = bb_maxstep;
+            } else {
+                // TODO: trust radius step
+                arrx::noalias(step) = -grad;
+                maxstep = sd_maxstep / 4;
+            }
         }
+
+        auto dx = arrx::norm_l2(step);
+        if (dx > maxstep) {
+            step *= (maxstep / dx);
+        }
+
         arrx::noalias(last_coords) = coords;
         last_en = en;
         last_grad = grad;
@@ -911,7 +942,7 @@ namespace autode {
         }
 
         // relax the path
-        auto opt = LBFGSMinimiser(params.maxiter, params.rmsgtol);
+        auto opt = BBMinimiser(params.maxiter, params.rmsgtol);
         opt.minimise_neb(neb, pot);
         return neb;
     }
