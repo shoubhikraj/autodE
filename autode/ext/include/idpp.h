@@ -125,6 +125,12 @@ namespace autode
         int n_backtrack = 0;  // number of backtracks
         double gtol; // gradient tolerance criteria
 
+        const double max_maxstep = 0.02; // maximum trust radius
+        const double min_maxstep = 0.001; // minimum trust radius
+
+        int Nmin = 0; // number of correct minimising steps
+        double maxstep = 0.01; // current trust radius
+
         const double bb_maxstep = 0.02; // max step size for BB
         const double sd_maxstep = 0.01; // max step size for SD
 
@@ -143,6 +149,8 @@ namespace autode
         void backtrack();
 
         void take_step();
+
+        void interpolate_line_search();
 
         int min_frontier(NEB& neb,
                          const NEB::frontier_pair idxs,
@@ -180,10 +188,6 @@ namespace autode
         void take_step();
 
         void backtrack();
-
-        int min_frontier(NEB& neb,
-                         const NEB::frontier_pair idxs,
-                         const IDPPPotential& pot);
 
         void minimise_neb(NEB& neb, const IDPPPotential& pot);
     };

@@ -556,7 +556,7 @@ public:
     }
 
     arrx::array1d& operator[](int idx) {
-        if (idx >= this->size()) throw std::exception("Something is wrong!");
+        if (idx >= this->size()) throw std::out_of_range("Something is wrong!");
         return *(ptrs[idx]);
     }
 };

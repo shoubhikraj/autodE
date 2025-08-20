@@ -640,7 +640,7 @@ namespace autode {
 
     void BBMinimiser::backtrack() {
         /* If energy is rising, backtrack to find a better step */
-        if (debug_pr) std::cout << "Energy rising... backtracking\n";
+        if (debug_pr) std::cout << "Energy/gradient rising... backtracking\n";
         arrx::noalias(step) = coords - last_coords;
         arrx::noalias(coords) = coords - 0.6 * step;
         n_backtrack++;
@@ -670,18 +670,30 @@ namespace autode {
         n_backtrack = 0;  // reset on succesful step
     }
 
+    void BBMinimiser::interpolate_line_search() {
+        /* Interpolate between last and current coordinates */
+        auto N_interv = 10;
+        double l_grad_norm = -1.0;
+        double l_alpha;
+        for (int i = 0; i < N_interv; i++) {
+            auto alpha = 1.0 * i / (N_interv - 1);
+            auto grad_norm = arrx::norm_l2(
+                alpha * last_grad + (1.0 - alpha) * grad
+            );
+            if (l_grad_norm < 0 || grad_norm < l_grad_norm) {
+                l_grad_norm = grad_norm;
+                l_alpha = alpha;
+            }
+        }
+        arrx::noalias(coords) = l_alpha * last_coords + (1.0 - l_alpha) * coords;
+        arrx::noalias(grad) = l_alpha * last_grad + (1.0 - l_alpha) * grad;
+    }
+
     void BBMinimiser::take_step() {
         /* Take a single optimiser step */
-        double maxstep;
         if (iter == 0) {
             step = -grad;
-            maxstep = sd_maxstep;
         } else {
-            // must backtrack if energy is rising too much
-            if ((en - last_en) / last_en > 2e-2) {
-                this->backtrack();
-                return;
-            }
             // TODO: make s_k, y_k permanent
             arrx::array1d s_k = coords - last_coords;
             arrx::array1d y_k = grad - last_grad;
@@ -689,80 +701,49 @@ namespace autode {
             // also backtrack if secant condition is not fulfilled
             // TODO: too many backtracks?
             if (s_dot_y < 0) {
-                this->backtrack();
-                return;
+                this->interpolate_line_search();
+                maxstep *= 0.6;
+                Nmin = 0;
+            } else if ((en - last_en) / last_en > 2e-2) {
+                this->interpolate_line_search();
+                maxstep *= 0.8;
+                Nmin = 0;
+            } else {
+                Nmin += 1;
             }
             double alpha;
             auto y_dot_y = arrx::dot(y_k, y_k);
             if (y_dot_y < 1e-8) {
                 alpha = s_dot_y / y_dot_y;  // short BB step
                 arrx::noalias(step) = -grad * alpha;
-                maxstep = bb_maxstep;
             } else if (s_dot_y > 1e-8) {
                 alpha = arrx::dot(s_k, s_k) / s_dot_y;  // long BB step
                 arrx::noalias(step) = -grad * alpha;
-                maxstep = bb_maxstep;
             } else {
-                // TODO: trust radius step
+                if (debug_pr) std::cout << "! BB step failed, taking SD step\n";
                 arrx::noalias(step) = -grad;
-                maxstep = sd_maxstep / 4;
+                // TODO: trust radius step
+                maxstep *= 0.5;
+                Nmin = 0;
             }
         }
 
-        auto dx = arrx::norm_l2(step);
+        auto dx = arrx::rms_v(step);
         if (dx > maxstep) {
             step *= (maxstep / dx);
         }
+
+        if (Nmin > 5) maxstep *= 1.15;
+        if (maxstep < min_maxstep) maxstep = min_maxstep;
+        if (maxstep > max_maxstep) maxstep = max_maxstep;
+
+        if (debug_pr) std::cout << "Maxstep: " << maxstep << "\n";
 
         arrx::noalias(last_coords) = coords;
         last_en = en;
         last_grad = grad;
         arrx::noalias(coords) = coords + step;
         n_backtrack = 0;  // reset on succesful step
-    }
-
-    int LBFGSMinimiser::min_frontier(NEB& neb,
-                                     const NEB::frontier_pair idxs,
-                                     const IDPPPotential& pot) {
-        /* Minimise frontier images of a NEB with LBGS method
-         */
-        ensure(idxs.left > 0 && idxs.right < neb.n_images - 1
-               && idxs.left < idxs.right, "Frontier indices are wrong");
-        if (debug_pr) std::cout << "=== Minimising frontier images: "
-                                << idxs.left << ", " << idxs.right << " ===\n";
-
-        while (iter < maxiter) {
-            pot.calc_idpp_engrad(idxs.left, neb.images[idxs.left]);
-            pot.calc_idpp_engrad(idxs.right, neb.images[idxs.right]);
-            neb.images[idxs.left].update_neb_grad(
-                neb.images[idxs.left - 1], neb.images[idxs.right], false
-            );
-            neb.images[idxs.right].update_neb_grad(
-                neb.images[idxs.left], neb.images[idxs.right + 1], false
-            );
-            neb.get_frontier_coords(coords);
-            neb.get_frontier_engrad(en, grad);
-            if (debug_pr)
-                std::cout << " Energies = (" << neb.images[idxs.left].en <<
-                            ", " << neb.images[idxs.right].en << ") RMS(g) = "
-                            << arrx::rms_v(grad) << "\n";
-            if (neb.images[idxs.left].max_g() < gtol
-                && neb.images[idxs.right].max_g() < gtol)
-            {
-                break;
-            }
-            this->take_step();
-            iter++;
-            neb.set_frontier_coords(coords);
-        }
-        if (iter == maxiter && debug_pr) {
-            std::cout << "Warning: exceeded max iterations\n";
-        }
-        if (neb.images[idxs.left].max_g() < neb.images[idxs.right].max_g()) {
-            return idxs.left;
-        } else {
-            return idxs.right;
-        }
     }
 
     int BBMinimiser::min_frontier(NEB& neb,

@@ -31,7 +31,7 @@ class IDPP:
         rms_gtol: float = 2e-3,
         maxiter: int = 1000,
         add_img_maxgtol: float = 1e-3,
-        add_img_maxiter: int = 100,
+        add_img_maxiter: int = 200,
     ):
         """
         Initialise an IDPP calculation
