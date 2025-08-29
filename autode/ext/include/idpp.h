@@ -125,14 +125,15 @@ namespace autode
         int n_backtrack = 0;  // number of backtracks
         double gtol; // gradient tolerance criteria
 
-        const double max_maxstep = 0.02; // maximum trust radius
-        const double min_maxstep = 0.001; // minimum trust radius
+        const double max_trust = 0.1; // maximum trust radius
+        const double min_trust = 0.001; // minimum trust radius
+        const double max_step = 0.05; //max displacement
 
-        int Nmin = 0; // number of correct minimising steps
-        double maxstep = 0.01; // current trust radius
+        int last_tr_upd = 0; // last iteration of trust update
+        double trust = 0.01; // current trust radius
 
-        const double bb_maxstep = 0.02; // max step size for BB
-        const double sd_maxstep = 0.01; // max step size for SD
+        //const double bb_maxstep = 0.02; // max step size for BB
+        //const double sd_maxstep = 0.01; // max step size for SD
 
     public:
         arrx::array1d coords, last_coords;  // current & last coordinates
@@ -147,6 +148,8 @@ namespace autode
         void calc_sd_step();
 
         void backtrack();
+
+        void update_trust_radius();
 
         void take_step();
 

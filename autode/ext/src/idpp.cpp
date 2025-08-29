@@ -689,6 +689,12 @@ namespace autode {
         arrx::noalias(grad) = l_alpha * last_grad + (1.0 - l_alpha) * grad;
     }
 
+    void BBMinimiser::update_trust_radius() {
+        if (iter == 0) {
+            return;
+        }
+    }
+
     void BBMinimiser::take_step() {
         /* Take a single optimiser step */
         if (iter == 0) {
@@ -700,17 +706,6 @@ namespace autode {
             auto s_dot_y = arrx::dot(s_k, y_k);
             // also backtrack if secant condition is not fulfilled
             // TODO: too many backtracks?
-            if (s_dot_y < 0) {
-                this->interpolate_line_search();
-                maxstep *= 0.6;
-                Nmin = 0;
-            } else if ((en - last_en) / last_en > 2e-2) {
-                this->interpolate_line_search();
-                maxstep *= 0.8;
-                Nmin = 0;
-            } else {
-                Nmin += 1;
-            }
             double alpha;
             auto y_dot_y = arrx::dot(y_k, y_k);
             if (y_dot_y < 1e-8) {
@@ -723,20 +718,10 @@ namespace autode {
                 if (debug_pr) std::cout << "! BB step failed, taking SD step\n";
                 arrx::noalias(step) = -grad;
                 // TODO: trust radius step
-                maxstep *= 0.5;
-                Nmin = 0;
             }
         }
 
         auto dx = arrx::rms_v(step);
-        if (dx > maxstep) {
-            step *= (maxstep / dx);
-        }
-
-        if (Nmin > 5) maxstep *= 1.15;
-        if (maxstep < min_maxstep) maxstep = min_maxstep;
-        if (maxstep > max_maxstep) maxstep = max_maxstep;
-
         if (debug_pr) std::cout << "Maxstep: " << maxstep << "\n";
 
         arrx::noalias(last_coords) = coords;
