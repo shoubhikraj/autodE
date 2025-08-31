@@ -580,123 +580,57 @@ namespace autode {
         }
     }
 
-    void BBMinimiser::calc_bb_step() {
-        /* Calculate the Barzilai-Borwein step */
-        auto dx = coords - last_coords;
-        arrx::array1d dg = grad - last_grad;
-        double dg_dot_dg = arrx::dot(dg, dg);
-        // default step is short BB step
-        double alpha;
-        if (dg_dot_dg > 1e-8) {
-            alpha = arrx::dot(dx, dg) / dg_dot_dg;
-        } else if (arrx::dot(dx, dg) > 1e-8) {
-            // long BB step
-            if (debug_pr) std::cout << " ! Long BB step\n";
-            alpha = arrx::dot(dx, dx) / arrx::dot(dx, dg);
-        } else {
-            // else take steepest descent
-            if (debug_pr) std::cout << " ! BB step failed, SD\n";
-            this->calc_sd_step();
-            return;
-        }
-
-        if (alpha < 0) {
-            if (debug_pr) std::cout << "alpha is negative, using SD step\n";
-            this->calc_sd_step();
-            return;
-        }
-        arrx::noalias(step) = -grad * alpha;
-        double max_step = arrx::abs_max(step);
-        if (max_step > bb_maxstep) {
-            step *= (bb_maxstep / max_step);
-        }
-    }
-
-    void LBFGSMinimiser::calc_sd_step() {
-        /* Calculate the steepest descent step */
-        arrx::noalias(step) = -grad;
-        double max_step = arrx::abs_max(step);
-        if (max_step > sd_maxstep) {
-            step *= (sd_maxstep / max_step);
-        }
-    }
-
-    void BBMinimiser::calc_sd_step() {
-        /* Calculate the first, steepest decent step */
-        arrx::noalias(step) = -grad;
-        double max_step = arrx::abs_max(step);
-        if (max_step > sd_maxstep) {
-            step *= (sd_maxstep / max_step);
-        }
-    }
-
-    void LBFGSMinimiser::backtrack() {
-        /* If gradient is rising, backtrack to find a better step */
-        if (debug_pr) std::cout << "Gradient rising... backtracking\n";
-        arrx::noalias(step) = coords - last_coords;
-        arrx::noalias(coords) = coords - 0.6 * step;
-        n_backtrack++;
-    }
-
-    void BBMinimiser::backtrack() {
-        /* If energy is rising, backtrack to find a better step */
-        if (debug_pr) std::cout << "Energy/gradient rising... backtracking\n";
-        arrx::noalias(step) = coords - last_coords;
-        arrx::noalias(coords) = coords - 0.6 * step;
-        n_backtrack++;
-    }
-
-    void LBFGSMinimiser::take_step() {
-        /* Take a single optimiser step */
-        if (iter == 0) {
-            this->calc_sd_step();
-        } else {
-            auto old_rms_grad = arrx::rms_v(last_grad);
-            auto rms_grad = arrx::rms_v(grad);
-            if ((rms_grad - old_rms_grad) / old_rms_grad > 10e-2) { // 10% rise max.
-                this->backtrack();
-                if (n_backtrack > 6)
-                    throw std::runtime_error("Too many backtracks");
-                // backtracking changes coords already so return
-                return;
-            } else {
-                this->calc_lbfgs_step();
-            }
-        }
-        last_coords = coords;
-        last_en = en;
-        last_grad = grad;
-        arrx::noalias(coords) = coords + step;
-        n_backtrack = 0;  // reset on succesful step
-    }
-
-    void BBMinimiser::interpolate_line_search() {
-        /* Interpolate between last and current coordinates */
-        auto N_interv = 10;
-        double l_grad_norm = -1.0;
-        double l_alpha;
-        for (int i = 0; i < N_interv; i++) {
-            auto alpha = 1.0 * i / (N_interv - 1);
-            auto grad_norm = arrx::norm_l2(
-                alpha * last_grad + (1.0 - alpha) * grad
-            );
-            if (l_grad_norm < 0 || grad_norm < l_grad_norm) {
-                l_grad_norm = grad_norm;
-                l_alpha = alpha;
-            }
-        }
-        arrx::noalias(coords) = l_alpha * last_coords + (1.0 - l_alpha) * coords;
-        arrx::noalias(grad) = l_alpha * last_grad + (1.0 - l_alpha) * grad;
-    }
-
     void BBMinimiser::update_trust_radius() {
+        /* Update the trust radius */
         if (iter == 0) {
+            last_low_rms_g = arrx::rms_v(grad);
+            last_low_rmsg_iter = 0;
             return;
         }
+
+        auto curr_rms_g = arrx::rms_v(grad);
+        auto prev_rms_g = arrx::rms_v(last_grad);
+        if (curr_rms_g < last_low_rms_g) {
+            last_low_rms_g = curr_rms_g;
+            last_low_rmsg_iter = iter;
+        }
+
+        if (curr_rms_g < prev_rms_g) {
+            Nmin++;
+        } else {
+            Nmin = 0;
+        }
+
+        if (iter % 5 != 0) return;  // only update every 5th iteration
+
+        // decrease trust radius if no improvement for 4 iterations
+        if (iter - last_low_rmsg_iter > 4) {
+            trust = std::max(trust * 0.7, min_trust);
+            if (debug_pr) std::cout << "Current trust radius " << trust << "\n";
+        } else if (Nmin >= 3) {
+            // increase if gradient improved for 3 consecutive iterations
+            // only increase if last step was at trust radius
+            auto last_dx = arrx::rms_v(coords - last_coords);
+            if (std::abs(last_dx - trust) / trust < 0.01) {
+                trust = std::min(trust * 1.1, max_trust);
+                if (debug_pr)
+                        std::cout << "Current trust radius " << trust << "\n";
+            }
+        }
+
     }
 
-    void BBMinimiser::take_step() {
+    bool BBMinimiser::take_step() {
         /* Take a single optimiser step */
+
+        this->update_trust_radius();
+
+        //if (iter - last_low_rmsg_iter > 15 && trust <= min_trust + 1e-5) {
+        //    if (debug_pr)
+        //            std::cout << "No improvement for 15 iterations, stopping\n";
+        //    return false;
+        //}
+
         if (iter == 0) {
             step = -grad;
         } else {
@@ -708,27 +642,33 @@ namespace autode {
             // TODO: too many backtracks?
             double alpha;
             auto y_dot_y = arrx::dot(y_k, y_k);
-            if (y_dot_y < 1e-8) {
+            if (y_dot_y > 1e-8) {
                 alpha = s_dot_y / y_dot_y;  // short BB step
+                if (alpha < 0) alpha *= -1.0;
                 arrx::noalias(step) = -grad * alpha;
             } else if (s_dot_y > 1e-8) {
                 alpha = arrx::dot(s_k, s_k) / s_dot_y;  // long BB step
                 arrx::noalias(step) = -grad * alpha;
             } else {
-                if (debug_pr) std::cout << "! BB step failed, taking SD step\n";
+                // cannot do BB step, take steepest descent
                 arrx::noalias(step) = -grad;
-                // TODO: trust radius step
             }
         }
 
         auto dx = arrx::rms_v(step);
-        if (debug_pr) std::cout << "Maxstep: " << maxstep << "\n";
+        if (dx > trust) {
+            step *= (trust / dx);
+        }
+        auto max_dx = arrx::abs_max(step);
+        if (max_dx > max_step) {
+            step *= (max_step / max_dx);
+        }
 
         arrx::noalias(last_coords) = coords;
         last_en = en;
         last_grad = grad;
         arrx::noalias(coords) = coords + step;
-        n_backtrack = 0;  // reset on succesful step
+        return true;
     }
 
     int BBMinimiser::min_frontier(NEB& neb,
@@ -752,6 +692,7 @@ namespace autode {
         if (debug_pr) std::cout << "=== Minimising frontier images: "
                                 << idxs.left << ", " << idxs.right << " ===\n";
 
+        int istat;
         while (iter < maxiter) {
             pot.calc_idpp_engrad(idxs.left, neb.images[idxs.left]);
             pot.calc_idpp_engrad(idxs.right, neb.images[idxs.right]);
@@ -768,51 +709,37 @@ namespace autode {
                             ", " << neb.images[idxs.right].en << ") RMS(g) = "
                             << arrx::rms_v(grad) << "\n";
             if (neb.images[idxs.left].max_g() < gtol
-                || neb.images[idxs.right].max_g() < gtol)
+                && neb.images[idxs.right].max_g() < gtol)
             {
+                istat = 0;  // both converged
                 break;
             }
-            this->take_step();
+            if (! this->take_step()) {
+                istat = 1; // cannot improve gradient anymore
+                break;
+            }
             iter++;
             neb.set_frontier_coords(coords);
+            if (iter == maxiter) istat = 2; // maxiter reached
         }
-        if (iter == maxiter && debug_pr) {
-            std::cout << "Warning: exceeded max iterations\n";
+        if (debug_pr) {
+            switch (istat) {
+            case 0:
+                std::cout << "Info: frontier images converged\n";
+                break;
+            case 1:
+                std::cout << "Warning: could not improve gradient anymore\n";
+                break;
+            case 2:
+                std::cout << "Warning: reached max iterations\n";
+                break;
+            }
         }
+
         if (neb.images[idxs.left].max_g() < neb.images[idxs.right].max_g()) {
             return idxs.left;
         } else {
             return idxs.right;
-        }
-    }
-
-    void LBFGSMinimiser::minimise_neb(NEB& neb, const IDPPPotential& pot) {
-        ensure(neb.images_prepared, "NEB images are not filled in");
-        if (debug_pr)
-            std::cout << "=== Minimising NEB path ===\n";
-
-        while (iter < maxiter) {
-            for (int k = 1; k < neb.n_images - 1; k++) {
-                pot.calc_idpp_engrad(k, neb.images[k]);
-            }
-            for (int k = 1; k < neb.n_images - 1; k++) {
-                neb.images[k].update_neb_grad(
-                    neb.images[k-1], neb.images[k+1], false
-                );
-            }
-            neb.get_coords(coords);
-            neb.get_engrad(en, grad);
-            auto curr_rms_g = arrx::rms_v(grad);
-            if (debug_pr) std::cout << " Path energy = " << en
-                                        << " RMS grad = " << curr_rms_g << "\n";
-            if (curr_rms_g < gtol) break;
-            this->take_step();
-            iter++;
-            neb.set_coords(coords);
-        }
-
-        if (iter == maxiter && debug_pr) {
-            std::cout << "Warning: exceeded max iterations\n";
         }
     }
 
@@ -826,6 +753,7 @@ namespace autode {
         if (debug_pr)
             std::cout << "=== Minimising NEB path ===\n";
 
+        int istat;
         while (iter < maxiter) {
             for (int k = 1; k < neb.n_images - 1; k++) {
                 pot.calc_idpp_engrad(k, neb.images[k]);
@@ -840,14 +768,31 @@ namespace autode {
             auto curr_rms_g = arrx::rms_v(grad);
             if (debug_pr) std::cout << " Path energy = " << en
                                         << " RMS grad = " << curr_rms_g << "\n";
-            if (curr_rms_g < gtol) break;
-            this->take_step();
+            if (curr_rms_g < gtol) {
+                istat = 0;  // converged
+                break;
+            }
+            if (! this->take_step()) {
+                istat = 1; // cannot improve gradient anymore
+                break;
+            }
             iter++;
             neb.set_coords(coords);
+            if (iter == maxiter) istat = 2; // maxiter reached
         }
 
-        if (iter == maxiter && debug_pr) {
-            std::cout << "Warning: exceeded max iterations\n";
+        if (debug_pr) {
+            switch (istat) {
+            case 0:
+                std::cout << "Info: NEB path converged\n";
+                break;
+            case 1:
+                std::cout << "Warning: could not improve gradient anymore\n";
+                break;
+            case 2:
+                std::cout << "Warning: reached max iterations\n";
+                break;
+            }
         }
     }
 
@@ -909,7 +854,7 @@ namespace autode {
 
         // relax the path
         auto opt = BBMinimiser(params.maxiter, params.rmsgtol);
-        opt.minimise_neb(neb, pot);
+        //opt.minimise_neb(neb, pot);
         return neb;
     }
 

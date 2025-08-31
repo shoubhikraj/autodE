@@ -122,18 +122,18 @@ namespace autode
     private:
         int iter = 0;  // current number of iterations
         int maxiter;  // maximum number of iterations
-        int n_backtrack = 0;  // number of backtracks
         double gtol; // gradient tolerance criteria
 
-        const double max_trust = 0.1; // maximum trust radius
+        const double max_trust = 0.05; // maximum trust radius
         const double min_trust = 0.001; // minimum trust radius
         const double max_step = 0.05; //max displacement
 
         int last_tr_upd = 0; // last iteration of trust update
         double trust = 0.01; // current trust radius
 
-        //const double bb_maxstep = 0.02; // max step size for BB
-        //const double sd_maxstep = 0.01; // max step size for SD
+        double last_low_rms_g; // last low RMS gradient
+        double last_low_rmsg_iter; // iteration of last low RMS g
+        int Nmin = 0; // iterations before trust radius can be increased
 
     public:
         arrx::array1d coords, last_coords;  // current & last coordinates
@@ -143,17 +143,9 @@ namespace autode
 
         explicit BBMinimiser(int max_iter, double tol);
 
-        void calc_bb_step();
-
-        void calc_sd_step();
-
-        void backtrack();
-
         void update_trust_radius();
 
-        void take_step();
-
-        void interpolate_line_search();
+        bool take_step();
 
         int min_frontier(NEB& neb,
                          const NEB::frontier_pair idxs,
