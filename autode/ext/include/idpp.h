@@ -155,39 +155,6 @@ namespace autode
         void minimise_neb(NEB& neb, const IDPPPotential& pot);
     };
 
-    class LBFGSMinimiser {
-    public:
-        deque_array s_ks;
-        deque_array y_ks;
-
-        arrx::array1d coords, last_coords;  // current & last coordinates
-        arrx::array1d grad, last_grad;  // current & last gradients
-        double en, last_en;  // current & last energies
-        arrx::array1d step;
-
-        int iter;
-        int maxiter;
-        int n_backtrack = 0;
-        double gtol;
-
-        double lbfgs_maxstep = 0.05;
-        double sd_maxstep = 0.01;
-
-        LBFGSMinimiser(int max_iter, double tol, int max_vecs = 5)
-            : s_ks(max_vecs), y_ks(max_vecs), iter(0), maxiter(max_iter),
-             gtol(tol) {}
-
-        void calc_lbfgs_step();
-
-        void calc_sd_step();
-
-        void take_step();
-
-        void backtrack();
-
-        void minimise_neb(NEB& neb, const IDPPPotential& pot);
-    };
-
     NEB calculate_neb(arrx::array1d init_coords,
                       arrx::array1d final_coords,
                       const int num_images,
