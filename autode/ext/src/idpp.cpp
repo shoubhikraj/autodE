@@ -620,26 +620,17 @@ namespace autode {
 
     }
 
-    bool BBMinimiser::take_step() {
+    void BBMinimiser::take_step() {
         /* Take a single optimiser step */
 
         this->update_trust_radius();
 
-        //if (iter - last_low_rmsg_iter > 15 && trust <= min_trust + 1e-5) {
-        //    if (debug_pr)
-        //            std::cout << "No improvement for 15 iterations, stopping\n";
-        //    return false;
-        //}
-
         if (iter == 0) {
             step = -grad;
         } else {
-            // TODO: make s_k, y_k permanent
-            arrx::array1d s_k = coords - last_coords;
-            arrx::array1d y_k = grad - last_grad;
+            arrx::noalias(s_k) = coords - last_coords;
+            arrx::noalias(y_k) = grad - last_grad;
             auto s_dot_y = arrx::dot(s_k, y_k);
-            // also backtrack if secant condition is not fulfilled
-            // TODO: too many backtracks?
             double alpha;
             auto y_dot_y = arrx::dot(y_k, y_k);
             if (y_dot_y > 1e-8) {
@@ -668,7 +659,6 @@ namespace autode {
         last_en = en;
         last_grad = grad;
         arrx::noalias(coords) = coords + step;
-        return true;
     }
 
     int BBMinimiser::min_frontier(NEB& neb,
@@ -692,7 +682,6 @@ namespace autode {
         if (debug_pr) std::cout << "=== Minimising frontier images: "
                                 << idxs.left << ", " << idxs.right << " ===\n";
 
-        int istat;
         while (iter < maxiter) {
             pot.calc_idpp_engrad(idxs.left, neb.images[idxs.left]);
             pot.calc_idpp_engrad(idxs.right, neb.images[idxs.right]);
@@ -711,29 +700,16 @@ namespace autode {
             if (neb.images[idxs.left].max_g() < gtol
                 && neb.images[idxs.right].max_g() < gtol)
             {
-                istat = 0;  // both converged
                 break;
             }
-            if (! this->take_step()) {
-                istat = 1; // cannot improve gradient anymore
-                break;
-            }
+            this->take_step();
             iter++;
             neb.set_frontier_coords(coords);
-            if (iter == maxiter) istat = 2; // maxiter reached
         }
-        if (debug_pr) {
-            switch (istat) {
-            case 0:
-                std::cout << "Info: frontier images converged\n";
-                break;
-            case 1:
-                std::cout << "Warning: could not improve gradient anymore\n";
-                break;
-            case 2:
-                std::cout << "Warning: reached max iterations\n";
-                break;
-            }
+        if (iter >= maxiter && debug_pr) {
+            std::cout << "Warning: reached max iterations\n";
+        } else if (debug_pr) {
+            std::cout << "Info: Frontier images converged\n";
         }
 
         if (neb.images[idxs.left].max_g() < neb.images[idxs.right].max_g()) {
@@ -753,7 +729,6 @@ namespace autode {
         if (debug_pr)
             std::cout << "=== Minimising NEB path ===\n";
 
-        int istat;
         while (iter < maxiter) {
             for (int k = 1; k < neb.n_images - 1; k++) {
                 pot.calc_idpp_engrad(k, neb.images[k]);
@@ -769,30 +744,17 @@ namespace autode {
             if (debug_pr) std::cout << " Path energy = " << en
                                         << " RMS grad = " << curr_rms_g << "\n";
             if (curr_rms_g < gtol) {
-                istat = 0;  // converged
                 break;
             }
-            if (! this->take_step()) {
-                istat = 1; // cannot improve gradient anymore
-                break;
-            }
+            this->take_step();
             iter++;
             neb.set_coords(coords);
-            if (iter == maxiter) istat = 2; // maxiter reached
         }
 
-        if (debug_pr) {
-            switch (istat) {
-            case 0:
-                std::cout << "Info: NEB path converged\n";
-                break;
-            case 1:
-                std::cout << "Warning: could not improve gradient anymore\n";
-                break;
-            case 2:
-                std::cout << "Warning: reached max iterations\n";
-                break;
-            }
+        if (iter >= maxiter && debug_pr) {
+            std::cout << "Warning: reached max iterations\n";
+        } else if (debug_pr) {
+            std::cout << "Info: NEB path converged\n";
         }
     }
 
@@ -854,7 +816,7 @@ namespace autode {
 
         // relax the path
         auto opt = BBMinimiser(params.maxiter, params.rmsgtol);
-        //opt.minimise_neb(neb, pot);
+        opt.minimise_neb(neb, pot);
         return neb;
     }
 

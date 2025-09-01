@@ -133,7 +133,8 @@ namespace autode
 
         double last_low_rms_g; // last low RMS gradient
         double last_low_rmsg_iter; // iteration of last low RMS g
-        int Nmin = 0; // iterations before trust radius can be increased
+        int Nmin = 0; // number of consecutive iters where RMS g decreased
+        arrx::array1d s_k, y_k; // change in x and g
 
     public:
         arrx::array1d coords, last_coords;  // current & last coordinates
@@ -145,7 +146,7 @@ namespace autode
 
         void update_trust_radius();
 
-        bool take_step();
+        void take_step();
 
         int min_frontier(NEB& neb,
                          const NEB::frontier_pair idxs,
