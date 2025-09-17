@@ -6,7 +6,7 @@ from scipy.spatial import distance_matrix
 from autode.species import Complex
 from autode.conformers import Conformers, Conformer
 from autode.bond_rearrangement import BondRearrangement
-from autode.geom import calc_rmsd, get_rot_mat_euler
+from autode.geom import calc_rmsd, get_rot_mat_euler, calc_heavy_atom_rmsd
 
 
 class AlignmentPenalty:
@@ -177,6 +177,7 @@ def prune_best_aligned_complex_conformers(
     if len(fbonds) == 0 or cmplx.n_conformers == 0:
         return None
 
+    # any complex with more than 30% higher RMS(bond) is removed
     all_rms_bond_ls = []
     for i, conf in enumerate(cmplx.conformers):
         rms_bond_l = math.sqrt(
@@ -189,16 +190,14 @@ def prune_best_aligned_complex_conformers(
     for i, conf in enumerate(cmplx.conformers):
         if all_rms_bond_ls[i] < min_rms_bond_l * dtol_fac:
             new_conf_list.append(conf)
-    print(
-        f"Pruned to {len(new_conf_list)} conformers based on " f"bond lengths"
-    )
+    print(f"Pruned to {len(new_conf_list)} conformers based on bond lengths")
 
     rmsd_conf_list: list = []
     for conf in new_conf_list:
         if len(rmsd_conf_list) == 0:
             rmsd_conf_list.append(conf)
         elif all(
-            calc_rmsd(conf.coordinates, other.coordinates) > rmsd_tol
+            calc_heavy_atom_rmsd(conf.atoms, other.atoms) > rmsd_tol
             for other in rmsd_conf_list
         ):
             rmsd_conf_list.append(conf)
@@ -207,13 +206,17 @@ def prune_best_aligned_complex_conformers(
     return None
 
 
-def get_best_pair_alignment(rct_cmplx: Complex, prod_cmplx: Complex):
+def get_pairs_of_reactive_confs(
+    rct_cmplx: Complex, prod_cmplx: Complex, bond_rearr: BondRearrangement
+):
     """
-    Obtain a pair of conformers based on 3D geometrical similarity
+    Get several pairs of reactant and product conformers for
+    further atom-mapping refinement
 
     Args:
         rct_cmplx:
         prod_cmplx:
+        bond_rearr:
 
     Returns:
 
@@ -228,39 +231,33 @@ def get_best_pair_alignment(rct_cmplx: Complex, prod_cmplx: Complex):
             [Conformer(name=prod_cmplx.name, species=prod_cmplx)]
         )
 
-    def get_cme_mol(mol):
-        """Get Coulomb matrix eigenvalues"""
-        arr = np.zeros(shape=(mol.n_atoms, mol.n_atoms))
-        for i in range(mol.n_atoms):
-            for j in range(mol.n_atoms):
-                if i == j:
-                    arr[i, j] = 0.5 * mol.atoms[i].atomic_number ** 2.4
-                else:
-                    arr[i, j] = (
-                        mol.atoms[i].atomic_number * mol.atoms[j].atomic_number
-                    ) / mol.distance(i, j)
-        return np.linalg.eigvalsh(arr)
+    pairs = []
+    if len(prod_cmplx.conformers) > len(rct_cmplx.conformers):
+        ref_confs = rct_cmplx.conformers
+        other_confs = prod_cmplx.conformers
+    else:
+        ref_confs = prod_cmplx.conformers
+        other_confs = rct_cmplx.conformers
 
-    rct_cme_list = []
-    prod_cme_list = []
-    for conf in rct_cmplx.conformers:
-        rct_cme_list.append(get_cme_mol(conf))
-    for conf in prod_cmplx.conformers:
-        prod_cme_list.append(get_cme_mol(conf))
+    heavy_idxs = [
+        i for i in range(rct_cmplx.n_atoms) if rct_cmplx.atoms[i] != "H"
+    ]
+    active_idxs = bond_rearr.active_atoms
+    heavy_active_idxs = list(set(heavy_idxs).union(set(active_idxs)))
 
-    lowest_similarity = None
-    best_pair: tuple = tuple()
-    for rct_i, prod_j in itertools.product(
-        range(rct_cmplx.n_conformers), range(prod_cmplx.n_conformers)
-    ):
-        cme_1 = rct_cme_list[rct_i]
-        cme_2 = prod_cme_list[prod_j]
-        similarity = np.linalg.norm(cme_1 - cme_2)
-        if lowest_similarity is None or similarity < lowest_similarity:
-            lowest_similarity = similarity
-            best_pair = rct_i, prod_j
+    for ref_conf in ref_confs:
+        best_rmsd = math.inf
+        best_conf = None
+        for other_conf in other_confs:
+            rmsd = calc_rmsd(
+                ref_conf.coordinates[heavy_active_idxs],
+                other_conf.coordinates[heavy_active_idxs],
+            )
+            print("RMSD", rmsd)
+            if rmsd < best_rmsd:
+                best_rmsd = rmsd
+                best_conf = other_conf
 
-    return (
-        rct_cmplx.conformers[best_pair[0]],
-        prod_cmplx.conformers[best_pair[1]],
-    )
+        pairs.append((ref_conf, best_conf))
+
+    return pairs
