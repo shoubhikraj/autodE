@@ -3,6 +3,8 @@ import math
 import numpy as np
 from scipy.optimize import minimize
 from scipy.spatial import distance_matrix
+
+from autode.mol_graphs import MolecularGraph
 from autode.species import Complex, ReactantComplex, ProductComplex
 from autode.conformers import Conformers, Conformer
 from autode.bond_rearrangement import BondRearrangement, get_bond_rearrangs
@@ -262,6 +264,42 @@ def get_pairs_of_reactive_confs(
         pairs.append((ref_conf, best_conf))
 
     return pairs
+
+
+def get_rxn_core_indices(ts_graph: "MolecularGraph") -> list[int]:
+    """
+    Obtain the 'core' for a TS graph, which contains all non-H atoms
+    and any H atom which is involved in the reaction and any H with
+    non-standard bonding pattern (e.g. attached to two or more atoms)
+
+    Args:
+        graph: The TS graph
+        bond_rearr: Bond rearrangement for the reaction
+
+    Returns:
+        (list[int]): A list of indices of the core atoms
+    """
+    idxs = list(ts_graph.nodes)
+    active_bonds = ts_graph.active_bonds
+    active_idxs = list(set().union(*active_bonds))
+
+    core_idxs = set()
+    for i in idxs:
+        if i in active_idxs:
+            core_idxs.add(i)
+        elif ts_graph[i]["atom_label"] != "H":
+            core_idxs.add(i)
+        elif ts_graph[i]["atom_label"] == "H" and ts_graph.degree[i] > 1:
+            core_idxs.add(i)
+    return list(core_idxs)
+
+
+def align_map_rct_prod_complexes(
+    rct_cmplx: Complex,
+    prod_cmplx: Complex,
+    bond_rearr: BondRearrangement,
+):
+    pass
 
 
 def align_species(
