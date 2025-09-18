@@ -4,12 +4,21 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.spatial import distance_matrix
 
+from autode.exceptions import NoMapping
 from autode.mol_graphs import MolecularGraph
 from autode.species import Complex, ReactantComplex, ProductComplex
 from autode.conformers import Conformers, Conformer
 from autode.bond_rearrangement import BondRearrangement, get_bond_rearrangs
 from autode.geom import calc_rmsd, get_rot_mat_euler, calc_heavy_atom_rmsd
-from autode.mol_graphs import get_mapping, reac_graph_to_prod_graph
+from autode.mol_graphs import (
+    get_mapping,
+    reac_graph_to_prod_graph,
+    graph_matcher,
+)
+from autode.neb.idpp import IDPP
+
+
+_NUM_INTERP_IMAGES = 40
 
 
 class AlignmentPenalty:
@@ -295,11 +304,52 @@ def get_rxn_core_indices(ts_graph: "MolecularGraph") -> list[int]:
 
 
 def align_map_rct_prod_complexes(
-    rct_cmplx: Complex,
-    prod_cmplx: Complex,
-    bond_rearr: BondRearrangement,
+    rct_coords: np.ndarray,
+    prod_coords: np.ndarray,
+    ts_graph: "MolecularGraph",
 ):
-    pass
+    """
+    Align a pair of reactant and product complexes (coordinates)
+    based on automorphisms of TS graphs
+
+    Args:
+        rct_coords:
+        prod_coords:
+        ts_graph:
+
+    Returns:
+
+    """
+    core_idxs = get_rxn_core_indices(ts_graph)
+    core_graph = ts_graph.subgraph(core_idxs)
+
+    idpp = IDPP(_NUM_INTERP_IMAGES)
+    gm = graph_matcher(core_graph, core_graph)
+    best_core_mapping = None
+    best_core_path_len = math.inf
+    for mapping in gm.isomorphisms_iter():
+        # TODO: check that the ordering is correct
+        rct_idxs, prod_idxs = zip(*mapping.items())
+        path_len = idpp.get_path_length(
+            rct_coords[rct_idxs], prod_coords[prod_idxs]
+        )
+        if path_len < best_core_path_len:
+            best_core_path_len = path_len
+            best_core_mapping = mapping
+
+    if best_core_mapping is None:
+        raise NoMapping
+
+    other_idxs = list(set(list(ts_graph)).difference(set(core_idxs)))
+    dummy_map = best_core_mapping.copy()
+    for k in other_idxs:
+        dummy_map[k] = k
+
+    rct_idxs, prod_idxs = zip(*dummy_map.items())
+    rct_coords = rct_coords[rct_idxs]
+    prod_coords = prod_coords[prod_idxs]
+
+    # now align the other atoms (i.e. hydrogens)
 
 
 def align_species(
