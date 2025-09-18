@@ -3,10 +3,11 @@ import math
 import numpy as np
 from scipy.optimize import minimize
 from scipy.spatial import distance_matrix
-from autode.species import Complex
+from autode.species import Complex, ReactantComplex, ProductComplex
 from autode.conformers import Conformers, Conformer
-from autode.bond_rearrangement import BondRearrangement
+from autode.bond_rearrangement import BondRearrangement, get_bond_rearrangs
 from autode.geom import calc_rmsd, get_rot_mat_euler, calc_heavy_atom_rmsd
+from autode.mol_graphs import get_mapping, reac_graph_to_prod_graph
 
 
 class AlignmentPenalty:
@@ -36,7 +37,7 @@ class AlignmentPenalty:
             for fbond in fbonds
         )
         self.fbonds = fbonds
-        self.vdw_radii = [
+        self.vdw_sums = [
             cmplx.atoms[i].vdw_radius + cmplx.atoms[j].vdw_radius
             for i, j in self.fbonds
         ]
@@ -112,7 +113,7 @@ class AlignmentPenalty:
         # add 4th order attractive force
         for idx, (i, j) in enumerate(self.fbonds):
             r = np.linalg.norm(new_coords[i] - new_coords[j])
-            r0 = self.vdw_radii[idx]
+            r0 = self.vdw_sums[idx]
             penalty += _k * (r - r0) ** 4
         return penalty
 
@@ -261,3 +262,24 @@ def get_pairs_of_reactive_confs(
         pairs.append((ref_conf, best_conf))
 
     return pairs
+
+
+def align_species(
+    reactant_mols: list,
+    product_mols: list,
+):
+    rct_cmplx = ReactantComplex(*reactant_mols)
+    prod_cmplx = ProductComplex(*product_mols)
+    # TODO: have get_bond_rearrangs ignore symmetry
+    bond_rearrs = get_bond_rearrangs(
+        rct_cmplx, prod_cmplx, name="alignment", save=False
+    )
+
+    for bond_rearr in bond_rearrs:
+        rct_copy = rct_cmplx.copy()
+        prod_copy = prod_cmplx.copy()
+        mapping = get_mapping(
+            prod_copy.graph,
+            reac_graph_to_prod_graph(rct_copy.graph, bond_rearr),
+        )
+        prod_copy.reorder_atoms(mapping)
