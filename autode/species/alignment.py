@@ -9,7 +9,12 @@ from autode.mol_graphs import MolecularGraph
 from autode.species import Complex, ReactantComplex, ProductComplex
 from autode.conformers import Conformers, Conformer
 from autode.bond_rearrangement import BondRearrangement, get_bond_rearrangs
-from autode.geom import calc_rmsd, get_rot_mat_euler, calc_heavy_atom_rmsd
+from autode.geom import (
+    calc_rmsd,
+    get_rot_mat_euler,
+    calc_heavy_atom_rmsd,
+    get_rot_mat_kabsch,
+)
 from autode.mol_graphs import (
     get_mapping,
     reac_graph_to_prod_graph,
@@ -349,7 +354,68 @@ def align_map_rct_prod_complexes(
     rct_coords = rct_coords[rct_idxs]
     prod_coords = prod_coords[prod_idxs]
 
+    # perform rigid body alignment on core_idxs
+    p_mat = np.array(rct_coords[core_idxs])
+    p_mat = p_mat - np.average(p_mat, axis=0)
+
+    q_mat = np.array(prod_coords[core_idxs])
+    q_mat = q_mat - np.average(q_mat, axis=0)
+
+    rot_mat = get_rot_mat_kabsch(p_mat, q_mat)
+    rct_coords = np.dot(rot_mat, rct_coords.T).T
+
     # now align the other atoms (i.e. hydrogens)
+
+
+def match_non_core_hs(
+    rct_coords: np.ndarray,
+    prod_coords: np.ndarray,
+    h_idxs: list[int],
+    core_mapping: dict[int, int],
+    ts_graph: "MolecularGraph",
+):
+    """
+    Match the non-core H atoms
+
+    Args:
+        rct_coords:
+        prod_coords:
+        h_idxs:
+        ts_graph:
+
+    Returns:
+
+    """
+    hs_nodes = {}
+    for idx in h_idxs:
+        assert ts_graph.degree[idx] == 1
+        node = list(ts_graph.neighbors(idx))[0]
+        assert node not in h_idxs
+        if node in hs_nodes:
+            continue
+
+        node_neighbours = list(ts_graph.neighbors(node))
+        all_node_hs = [k for k in node_neighbours if k in h_idxs]
+        hs_nodes[node] = all_node_hs
+
+    idpp = IDPP(_NUM_INTERP_IMAGES)
+    total_mapping = None
+    for node, h_idxs in hs_nodes.items():
+        best_mapping = None
+        best_path_len = math.inf
+        for perm in itertools.permutations(h_idxs):
+            new_map = core_mapping.copy()
+            for k, v in zip(h_idxs, perm):
+                new_map[k] = v
+
+            rct_idxs, prod_idxs = zip(*new_map.items())
+            path_len = idpp.get_path_length(
+                rct_coords[rct_idxs], prod_coords[prod_idxs]
+            )
+            if path_len < best_path_len:
+                best_path_len = path_len
+                best_mapping = new_map
+        assert best_mapping is not None
 
 
 def align_species(
