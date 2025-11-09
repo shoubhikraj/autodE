@@ -6,7 +6,13 @@ from scipy.spatial import distance_matrix
 
 from autode.exceptions import NoMapping
 from autode.mol_graphs import MolecularGraph
-from autode.species import Complex, ReactantComplex, ProductComplex
+from autode.species import (
+    Complex,
+    ReactantComplex,
+    ProductComplex,
+    Reactant,
+    Product,
+)
 from autode.conformers import Conformers, Conformer
 from autode.bond_rearrangement import BondRearrangement, get_bond_rearrangs
 from autode.geom import (
@@ -132,6 +138,289 @@ class AlignmentPenalty:
             r0 = self.vdw_sums[idx]
             penalty += _k * (r - r0) ** 4
         return penalty
+
+
+def get_oriented_complexes(
+    reactive_complex: Complex,
+    bond_rearr: BondRearrangement,
+    rmsd_prune_tol: float = 0.2,
+):
+    """
+    Create oriented conformers of a complex composed of one-or-more
+    species by adding forces along the forming bonds so that their
+    van der Waals spheres touch.
+
+    Args:
+        reactive_complex:
+        bond_rearr:
+        rmsd_prune_tol:
+
+    Returns:
+        (list[Complex]): A list of Complex objects
+    """
+    if reactive_complex.n_molecules < 2:
+        return [reactive_complex]
+
+    if len(bond_rearr.fbonds) == 0:
+        raise RuntimeError(
+            "Complex alignment requested, but no forming bonds!"
+        )
+
+    # Check that there is at least one active atom in each molecule in complex
+    for mol_idx in range(reactive_complex.n_molecules):
+        mol_atom_idxs = reactive_complex.atom_indexes(mol_idx)
+        assert any(
+            atom_idx in fbond
+            for fbond in bond_rearr.fbonds
+            for atom_idx in mol_atom_idxs
+        )
+    # TODO: Add a test for this part later
+    # work on a copy to avoid modifying the original complex
+    cmplx = reactive_complex.copy()
+    cmplx.conformers = []
+    cmplx._generate_conformers()
+
+    complex_orientations = []
+
+    def put_unique_conf_into_list(new_conf):
+        """Put only unique conformations (by RMSD) into the list"""
+        min_rmsd = np.inf
+        for c in complex_orientations:
+            rmsd = calc_heavy_atom_rmsd(new_conf.atoms, c.atoms)
+            if rmsd < min_rmsd:
+                min_rmsd = rmsd
+        if min_rmsd > rmsd_prune_tol:
+            complex_orientations.append(new_conf)
+
+    for conf in cmplx.conformers:
+        tmp_cmplx = reactive_complex.copy()
+        tmp_cmplx.conformers = []
+        tmp_cmplx.coordinates = conf.coordinates
+        penalty_func = AlignmentPenalty(tmp_cmplx, bond_rearr)
+        x0 = np.zeros((6 * (cmplx.n_molecules - 1),))
+        res = minimize(
+            fun=penalty_func.penalty_rotate_translate,
+            x0=x0,
+            method="l-bfgs-b",
+        )
+        tmp_cmplx.coordinates = penalty_func.get_rotated_translated_coords(
+            res.x
+        )
+        put_unique_conf_into_list(tmp_cmplx)
+
+    return complex_orientations
+
+
+def create_oriented_mapped_complexes(
+    *args, print_interp_geometries: bool = True
+):
+    """
+    Start from a set of reactants and products and then return pairs
+    of reactant complexes and product complexes that are aligned as
+    well as atom-mapped.
+
+    Args:
+        *args:
+        print_interp_geometries: Whether to print the path between
+                aligned, mapped reactants and products
+    """
+    reactants = []
+    products = []
+    for mol in args:
+        if isinstance(mol, Reactant):
+            reactants.append(mol)
+        elif isinstance(mol, Product):
+            products.append(mol)
+        else:
+            raise ValueError(f"Must be Reactant/Product but got {type(mol)}")
+
+    rct_complex = ReactantComplex(*reactants)
+    prd_complex = ProductComplex(*products)
+
+    all_brs = get_bond_rearrangs(
+        rct_complex, prd_complex, name="dbl", save=False
+    )
+    print(f"Found *{len(all_brs)}* bond rearrangements")
+
+    for k, bond_rearr in enumerate(all_brs):
+        reactant = rct_complex.copy()
+        product = prd_complex.copy()
+        # initial mapping sets correct connectivity but not geometry
+        init_mapping = get_mapping(
+            graph1=product.graph,
+            graph2=reac_graph_to_prod_graph(reactant.graph, bond_rearr),
+        )
+        init_mapping_inv = {v: k for k, v in init_mapping.items()}
+        bond_rearr_inv = BondRearrangement(
+            breaking_bonds=[
+                (init_mapping_inv[i], init_mapping_inv[j])
+                for i, j in bond_rearr.fbonds
+            ],
+            forming_bonds=[
+                (init_mapping_inv[i], init_mapping_inv[j])
+                for i, j in bond_rearr.bbonds
+            ],
+        )
+        oriented_rcts = get_oriented_complexes(reactant, bond_rearr)
+        oriented_prds = get_oriented_complexes(product, bond_rearr_inv)
+        for prod in oriented_prds:
+            prod.reorder_atoms(init_mapping)
+        # TODO: Remove after DEBUG
+        for mol in oriented_rcts:
+            mol.print_xyz_file(filename=f"rct_{k}.xyz", append=True)
+        for mol in oriented_prds:
+            mol.print_xyz_file(filename=f"prd_{k}.xyz", append=True)
+
+
+class InterpAtomMapper:
+    """
+    Refine atom-mapping based on the TS-like graph for all pairs of coordinates
+    """
+
+    def __init__(
+        self,
+        coords_pairs: list[tuple[np.ndarray, np.ndarray]],
+        ts_graph: MolecularGraph,
+    ):
+        """
+        Create an atom-mappper object
+
+        Args:
+            coords_pairs (list[tuple[np.ndarray, np.ndarray]]): A list of pairs of
+                        reactant and product coordinates
+            ts_graph:
+        """
+        # reshape to (-1, 3)
+        self.coords_pairs = [
+            (coords_a.reshape(-1, 3), coords_b.reshape(-1, 3))
+            for coords_a, coords_b in coords_pairs
+        ]
+        assert isinstance(ts_graph, MolecularGraph)
+        self.ts_graph = ts_graph
+
+    @property
+    def _core_idxs(self):
+        """
+        Obtain the core indices for the TS-like graph, which include all
+        the heavy atoms and any H atom which is involved in the reaction
+
+        Returns:
+            (list[int]): A list of indices of the core atoms
+        """
+        idxs = list(self.ts_graph.nodes)
+        assert idxs == list(range(max(idxs) + 1))
+        active_bonds = self.ts_graph.active_bonds
+        active_idxs = list(set().union(*active_bonds))
+        # TODO: Also put free H2 in core indices (??), only -XHn in non core idxs
+        # any H attached to reaction centre is also core??
+        core_idxs = set()
+        for i in idxs:
+            if i in active_idxs:
+                core_idxs.add(i)
+            elif self.ts_graph.nodes[i]["atom_label"] != "H":
+                core_idxs.add(i)
+            elif (
+                self.ts_graph.nodes[i]["atom_label"] == "H"
+                and self.ts_graph.degree[i] > 1
+            ):
+                core_idxs.add(i)
+        return list(core_idxs)
+
+    def map_core_atoms(self):
+        """
+        Map the core atoms for the reactant and product complexes
+        """
+        core_graph = self.ts_graph.subgraph(self._core_idxs)
+        gm = graph_matcher(core_graph, core_graph)
+        best_core_mappings = [dict() for i in self.coords_pairs]
+        best_path_lens = [math.inf for i in self.coords_pairs]
+        for mapping in gm.isomorphisms_iter():
+            rct_idxs, prod_idxs = zip(*mapping.items())
+            for k, (rct_coords, prod_coords) in enumerate(self.coords_pairs):
+                # TODO: Make IDPP realign the coordinates with Kabsch! -> make a new function for this
+                path_len = align_get_idpp_path_len(
+                    rct_coords[list(rct_idxs)], prod_coords[list(prod_idxs)]
+                )
+                print("Path length:", path_len)
+                if path_len < best_path_lens[k]:
+                    best_path_lens[k] = path_len
+                    best_core_mappings[k] = mapping
+        return best_core_mappings, best_path_lens
+
+    def get_best_mappings(self):
+        best_core_maps, best_path_lens = self.map_core_atoms()
+        final_maps, final_path_lens = [], []
+        for k, coords_pair in enumerate(self.coords_pairs):
+            total_map, total_len = self.map_hydrogens(
+                coords_pair, best_core_maps[k]
+            )
+            final_maps.append(total_map)
+            final_path_lens.append(total_len)
+        return final_maps, final_path_lens
+
+    def map_hydrogens(self, coords_pair, core_map):
+        all_idxs = set(list(self.ts_graph.nodes))
+        h_idxs = list(all_idxs.difference(self._core_idxs))
+        rct_coords, prod_coords = coords_pair
+        # start with core and add hydrogens
+        all_mappings = core_map.copy()
+
+        # get h atom groups -XHn
+        all_h_groups = []
+        for idx in h_idxs:
+            if any(idx in group for group in all_h_groups):
+                continue
+
+            n_bonds_to_h = self.ts_graph.degree[idx]
+            # detached H, unusual but may happen(?), add that as a group
+            if n_bonds_to_h == 0:
+                all_h_groups.append(
+                    [
+                        idx,
+                    ]
+                )
+            elif n_bonds_to_h == 1:
+                centre = list(self.ts_graph.neighbors(idx))[0]
+                if self.ts_graph.nodes[centre]["atom_label"] != "H":
+                    centre_attached = set(
+                        list(self.ts_graph.neighbors(centre))
+                    )
+                    centre_hs = list(centre_attached.intersection(h_idxs))
+                    # put all those Hs into a group
+                    all_h_groups.append(centre_hs)
+                else:
+                    # here we have a free H-H attachment (unusual!)
+                    all_h_groups.append([idxs, centre])
+            else:
+                raise RuntimeError(
+                    "Something went wrong in counting hydrogens"
+                )
+
+        # now map the hydrogen groups, in order of the number of H in groups
+        all_h_groups.sort(key=len)
+        for h_group in all_h_groups:
+            if len(h_group) == 1:
+                all_mappings[h_group[0]] = h_group[0]
+            elif len(h_group) >= 2:
+                print(f"Aligning H group:", h_group)
+                best_len = math.inf
+                best_perm = None
+                for perm in itertools.permutations(h_group):
+                    tmp_mappings = all_mappings.copy()
+                    tmp_mappings.update(dict(zip(h_group, perm)))
+                    rct_idxs, prod_idxs = zip(*tmp_mappings.items())
+                    path_len = align_get_idpp_path_len(
+                        rct_coords[list(rct_idxs)],
+                        prod_coords[list(prod_idxs)],
+                    )
+                    print("For permutation:", perm, "length=", path_len)
+                    if path_len < best_len:
+                        best_len = path_len
+                        best_perm = perm
+                print("Best length =", best_len)
+                all_mappings.update(dict(zip(h_group, best_perm)))
+
+        return all_mappings, best_len
 
 
 def create_aligned_complex_conformers(
