@@ -26,6 +26,7 @@ from autode.mol_graphs import (
     reac_graph_to_prod_graph,
     graph_matcher,
 )
+from autode.log import logger
 from autode.neb.idpp import IDPP
 
 
@@ -177,10 +178,10 @@ def get_oriented_complexes(
     # TODO: Add a test for this part later
     # work on a copy to avoid modifying the original complex
     cmplx = reactive_complex.copy()
-    cmplx.conformers = []
+    cmplx.conformers = Conformers()
     cmplx._generate_conformers()
 
-    complex_orientations = []
+    complex_orientations: list[Complex] = []
 
     def put_unique_conf_into_list(new_conf):
         """Put only unique conformations (by RMSD) into the list"""
@@ -194,7 +195,7 @@ def get_oriented_complexes(
 
     for conf in cmplx.conformers:
         tmp_cmplx = reactive_complex.copy()
-        tmp_cmplx.conformers = []
+        tmp_cmplx.conformers = Conformers()
         tmp_cmplx.coordinates = conf.coordinates
         penalty_func = AlignmentPenalty(tmp_cmplx, bond_rearr)
         x0 = np.zeros((6 * (cmplx.n_molecules - 1),))
@@ -292,14 +293,15 @@ class InterpAtomMapper:
         """
         # reshape to (-1, 3)
         self.coords_pairs = [
-            (coords_a.reshape(-1, 3), coords_b.reshape(-1, 3))
+            (coords_a.reshape((-1, 3)), coords_b.reshape((-1, 3)))
             for coords_a, coords_b in coords_pairs
         ]
         assert isinstance(ts_graph, MolecularGraph)
         self.ts_graph = ts_graph
+        self.idpp_obj = IDPP(n_images=_NUM_INTERP_IMAGES)
 
     @property
-    def _core_idxs(self):
+    def _core_idxs(self) -> list[int]:
         """
         Obtain the core indices for the TS-like graph, which include all
         the heavy atoms and any H atom which is involved in the reaction
@@ -311,34 +313,59 @@ class InterpAtomMapper:
         assert idxs == list(range(max(idxs) + 1))
         active_bonds = self.ts_graph.active_bonds
         active_idxs = list(set().union(*active_bonds))
-        # TODO: Also put free H2 in core indices (??), only -XHn in non core idxs
-        # any H attached to reaction centre is also core??
+        # TODO: Should we put free, non-participating H2 (rare?) in active idxs?
+        # Should H attached to active atoms be also active?
         core_idxs = set()
         for i in idxs:
             if i in active_idxs:
                 core_idxs.add(i)
             elif self.ts_graph.nodes[i]["atom_label"] != "H":
                 core_idxs.add(i)
-            elif (
-                self.ts_graph.nodes[i]["atom_label"] == "H"
-                and self.ts_graph.degree[i] > 1
-            ):
-                core_idxs.add(i)
+            elif self.ts_graph.nodes[i]["atom_label"] == "H":
+                if self.ts_graph.degree[i] > 1:
+                    core_idxs.add(i)
         return list(core_idxs)
 
-    def map_core_atoms(self):
+    def align_get_idpp_path_len(
+        self, coords_a: np.ndarray, coords_b: np.ndarray
+    ) -> float:
+        """
+        Calculate the path length between two sets of coordinates,
+        after a Kabsch alignment
+
+        Args:
+            coords_a (np.ndarray): First set of coordinates (N x 3)
+            coords_b (np.ndarray): Second set of coordinates (N x 3)
+
+        Returns:
+            (float): The path length between the two sets of coordinates
+        """
+        coords_a = coords_a - np.average(coords_a, axis=0)
+        coords_b = coords_b - np.average(coords_b, axis=0)
+
+        rot_mat = get_rot_mat_kabsch(coords_a, coords_b)
+        coords_a = np.dot(rot_mat, coords_a.T).T
+        return self.idpp_obj.get_path_length(coords_a, coords_b)
+
+    def map_core_atoms(self) -> tuple[list[dict[int, int]], list[float]]:
         """
         Map the core atoms for the reactant and product complexes
+
+        Returns:
+            (tuple[list[dict[int, int]], list[float]]): A tuple of the best
+                            core mappings and path lengths for those maps
         """
         core_graph = self.ts_graph.subgraph(self._core_idxs)
         gm = graph_matcher(core_graph, core_graph)
-        best_core_mappings = [dict() for i in self.coords_pairs]
+        best_core_mappings: list[dict[int, int]] = [
+            dict() for i in self.coords_pairs
+        ]
         best_path_lens = [math.inf for i in self.coords_pairs]
         for mapping in gm.isomorphisms_iter():
             rct_idxs, prod_idxs = zip(*mapping.items())
             for k, (rct_coords, prod_coords) in enumerate(self.coords_pairs):
                 # TODO: Make IDPP realign the coordinates with Kabsch! -> make a new function for this
-                path_len = align_get_idpp_path_len(
+                path_len = self.align_get_idpp_path_len(
                     rct_coords[list(rct_idxs)], prod_coords[list(prod_idxs)]
                 )
                 print("Path length:", path_len)
@@ -390,7 +417,7 @@ class InterpAtomMapper:
                     all_h_groups.append(centre_hs)
                 else:
                     # here we have a free H-H attachment (unusual!)
-                    all_h_groups.append([idxs, centre])
+                    all_h_groups.append([idx, centre])
             else:
                 raise RuntimeError(
                     "Something went wrong in counting hydrogens"
@@ -409,7 +436,7 @@ class InterpAtomMapper:
                     tmp_mappings = all_mappings.copy()
                     tmp_mappings.update(dict(zip(h_group, perm)))
                     rct_idxs, prod_idxs = zip(*tmp_mappings.items())
-                    path_len = align_get_idpp_path_len(
+                    path_len = self.align_get_idpp_path_len(
                         rct_coords[list(rct_idxs)],
                         prod_coords[list(prod_idxs)],
                     )
