@@ -392,7 +392,7 @@ class InterpAtomMapper:
         # start with core and add hydrogens
         all_mappings = core_map.copy()
 
-        # get h atom groups -XHn
+        # get h atom groups -XHn (also H2)
         all_h_groups = []
         for idx in h_idxs:
             if any(idx in group for group in all_h_groups):
