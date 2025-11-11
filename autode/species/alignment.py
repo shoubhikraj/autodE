@@ -298,13 +298,14 @@ class InterpAtomMapper:
         ]
         assert isinstance(ts_graph, MolecularGraph)
         self.ts_graph = ts_graph
-        self.idpp_obj = IDPP(n_images=_NUM_INTERP_IMAGES)
+        self.idpp_obj = IDPP(n_images=_NUM_INTERP_IMAGES, sequential=False)
 
     @property
-    def _core_idxs(self) -> list[int]:
+    def _core_and_other_idxs(self) -> tuple[list[int], list[int]]:
         """
         Obtain the core indices for the TS-like graph, which include all
-        the heavy atoms and any H atom which is involved in the reaction
+        the heavy atoms and any H atom which is involved in the reaction.
+        Also returns the non-core indices
 
         Returns:
             (list[int]): A list of indices of the core atoms
@@ -313,8 +314,9 @@ class InterpAtomMapper:
         assert idxs == list(range(max(idxs) + 1))
         active_bonds = self.ts_graph.active_bonds
         active_idxs = list(set().union(*active_bonds))
-        # TODO: Should we put free, non-participating H2 (rare?) in active idxs?
-        # Should H attached to active atoms be also active?
+        # NOTE: Only heavy atoms, active atoms and H atoms which are attached
+        # to the active atoms, and any H atom with multiple bonds are included
+        # in the core part. We do NOT include free, non-participating H2 (rare?)
         core_idxs = set()
         for i in idxs:
             if i in active_idxs:
@@ -322,11 +324,35 @@ class InterpAtomMapper:
             elif self.ts_graph.nodes[i]["atom_label"] != "H":
                 core_idxs.add(i)
             elif self.ts_graph.nodes[i]["atom_label"] == "H":
+                if any(self.ts_graph.has_edge(i, j) for j in active_idxs):
+                    core_idxs.add(i)
                 if self.ts_graph.degree[i] > 1:
                     core_idxs.add(i)
-        return list(core_idxs)
+        return list(core_idxs), list(set(idxs) - set(core_idxs))
 
-    def align_get_idpp_path_len(
+    @staticmethod
+    def _get_aligned_centred_coords(
+        coords_a: np.ndarray, coords_b: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Perform a Kabsch alignment of two sets of coordinates.
+        Will also translate them both to the origin
+
+        Args:
+            coords_a: (N x 3) array
+            coords_b: (N x 3) array
+
+        Returns:
+            (tuple[np.ndarray, np.ndarray]): The aligned coordinates
+        """
+        coords_a = coords_a - np.average(coords_a, axis=0)
+        coords_b = coords_b - np.average(coords_b, axis=0)
+
+        rot_mat = get_rot_mat_kabsch(coords_a, coords_b)
+        coords_a = np.dot(rot_mat, coords_a.T).T
+        return coords_a, coords_b
+
+    def _align_get_idpp_path_len(
         self, coords_a: np.ndarray, coords_b: np.ndarray
     ) -> float:
         """
@@ -340,39 +366,39 @@ class InterpAtomMapper:
         Returns:
             (float): The path length between the two sets of coordinates
         """
-        coords_a = coords_a - np.average(coords_a, axis=0)
-        coords_b = coords_b - np.average(coords_b, axis=0)
+        return self.idpp_obj.get_path_length(
+            *self._get_aligned_centred_coords(coords_a, coords_b)
+        )
 
-        rot_mat = get_rot_mat_kabsch(coords_a, coords_b)
-        coords_a = np.dot(rot_mat, coords_a.T).T
-        return self.idpp_obj.get_path_length(coords_a, coords_b)
-
-    def map_core_atoms(self) -> tuple[list[dict[int, int]], list[float]]:
+    def map_core_atoms(self) -> list[dict[int, int]]:
         """
         Map the core atoms for the reactant and product complexes
 
         Returns:
-            (tuple[list[dict[int, int]], list[float]]): A tuple of the best
+            (list[dict[int, int]]): A tuple of the best
                             core mappings and path lengths for those maps
         """
-        core_graph = self.ts_graph.subgraph(self._core_idxs)
+        core_graph = self.ts_graph.subgraph(self._core_and_other_idxs[0])
         gm = graph_matcher(core_graph, core_graph)
         best_core_mappings: list[dict[int, int]] = [
-            dict() for i in self.coords_pairs
+            dict() for _ in self.coords_pairs
         ]
-        best_path_lens = [math.inf for i in self.coords_pairs]
+        best_path_lens = [math.inf for _ in self.coords_pairs]
         for mapping in gm.isomorphisms_iter():
             rct_idxs, prod_idxs = zip(*mapping.items())
             for k, (rct_coords, prod_coords) in enumerate(self.coords_pairs):
-                # TODO: Make IDPP realign the coordinates with Kabsch! -> make a new function for this
-                path_len = self.align_get_idpp_path_len(
-                    rct_coords[list(rct_idxs)], prod_coords[list(prod_idxs)]
+                # TODO: Remove the get_aligned_idpp_path_len function
+                path_len = self.idpp_obj.get_path_length(
+                    *self._get_aligned_centred_coords(
+                        rct_coords[list(rct_idxs)],
+                        prod_coords[list(prod_idxs)],
+                    )
                 )
-                print("Path length:", path_len)
                 if path_len < best_path_lens[k]:
                     best_path_lens[k] = path_len
                     best_core_mappings[k] = mapping
-        return best_core_mappings, best_path_lens
+        logger.info(f"Finished mapping core atoms...")
+        return best_core_mappings
 
     def get_best_mappings(self):
         best_core_maps, best_path_lens = self.map_core_atoms()
