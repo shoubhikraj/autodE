@@ -352,24 +352,6 @@ class InterpAtomMapper:
         coords_a = np.dot(rot_mat, coords_a.T).T
         return coords_a, coords_b
 
-    def _align_get_idpp_path_len(
-        self, coords_a: np.ndarray, coords_b: np.ndarray
-    ) -> float:
-        """
-        Calculate the path length between two sets of coordinates,
-        after a Kabsch alignment
-
-        Args:
-            coords_a (np.ndarray): First set of coordinates (N x 3)
-            coords_b (np.ndarray): Second set of coordinates (N x 3)
-
-        Returns:
-            (float): The path length between the two sets of coordinates
-        """
-        return self.idpp_obj.get_path_length(
-            *self._get_aligned_centred_coords(coords_a, coords_b)
-        )
-
     def map_core_atoms(self) -> list[dict[int, int]]:
         """
         Map the core atoms for the reactant and product complexes
@@ -412,8 +394,7 @@ class InterpAtomMapper:
         return final_maps, final_path_lens
 
     def map_hydrogens(self, coords_pair, core_map):
-        all_idxs = set(list(self.ts_graph.nodes))
-        h_idxs = list(all_idxs.difference(self._core_idxs))
+        h_idxs = self._core_and_other_idxs[1]
         rct_coords, prod_coords = coords_pair
         # start with core and add hydrogens
         all_mappings = core_map.copy()
@@ -427,11 +408,7 @@ class InterpAtomMapper:
             n_bonds_to_h = self.ts_graph.degree[idx]
             # detached H, unusual but may happen(?), add that as a group
             if n_bonds_to_h == 0:
-                all_h_groups.append(
-                    [
-                        idx,
-                    ]
-                )
+                all_h_groups.append([idx])
             elif n_bonds_to_h == 1:
                 centre = list(self.ts_graph.neighbors(idx))[0]
                 if self.ts_graph.nodes[centre]["atom_label"] != "H":
@@ -462,9 +439,11 @@ class InterpAtomMapper:
                     tmp_mappings = all_mappings.copy()
                     tmp_mappings.update(dict(zip(h_group, perm)))
                     rct_idxs, prod_idxs = zip(*tmp_mappings.items())
-                    path_len = self.align_get_idpp_path_len(
-                        rct_coords[list(rct_idxs)],
-                        prod_coords[list(prod_idxs)],
+                    path_len = self.idpp_obj.get_path_length(
+                        *self._get_aligned_centred_coords(
+                            rct_coords[list(rct_idxs)],
+                            prod_coords[list(prod_idxs)],
+                        )
                     )
                     print("For permutation:", perm, "length=", path_len)
                     if path_len < best_len:
@@ -473,7 +452,15 @@ class InterpAtomMapper:
                 print("Best length =", best_len)
                 all_mappings.update(dict(zip(h_group, best_perm)))
 
-        return all_mappings, best_len
+        final_rct_idxs, final_prod_idxs = zip(*all_mappings.items())
+        final_len = self.idpp_obj.get_path_length(
+            *self._get_aligned_centred_coords(
+                rct_coords[list(final_rct_idxs)],
+                prod_coords[list(final_prod_idxs)],
+            )
+        )
+
+        return all_mappings, final_len
 
 
 def create_aligned_complex_conformers(
