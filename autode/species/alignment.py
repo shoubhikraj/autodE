@@ -125,7 +125,7 @@ class AlignmentPenalty:
         Returns:
             (float): The penalty value
         """
-        _k = 0.5
+        _k = 0.1
         penalty = 0.0
         new_coords = self.get_rotated_translated_coords(x)
         for i, j in itertools.combinations(range(self.n_molecules), 2):
@@ -137,7 +137,7 @@ class AlignmentPenalty:
         for idx, (i, j) in enumerate(self.fbonds):
             r = np.linalg.norm(new_coords[i] - new_coords[j])
             r0 = self.vdw_sums[idx]
-            penalty += _k * (r - r0) ** 4
+            penalty += _k * (r - r0) ** 2
         return penalty
 
 
@@ -212,6 +212,66 @@ def get_oriented_complexes(
     return complex_orientations
 
 
+def calculate_bond_path_obstruction(mol, i, j):
+    """
+    Calculate the path obstruction between atoms i and j in a
+    molecule mol
+
+    Args:
+        mol:
+        i:
+        j:
+
+    Returns:
+        (float): Average path obstruction
+    """
+
+    def get_perp_vector(vec):
+        """Return a perpendicular vector to x using cross products"""
+        dot_prods = [
+            np.abs(np.dot(vec, np.array([1, 0, 0]))),
+            np.abs(np.dot(vec, np.array([0, 1, 0]))),
+            np.abs(np.dot(vec, np.array([0, 0, 1]))),
+        ]
+        idx = np.argmin(dot_prods)
+        if idx == 0:
+            return np.cross(vec, np.array([1, 0, 0]))
+        elif idx == 1:
+            return np.cross(vec, np.array([0, 1, 0]))
+        else:
+            return np.cross(vec, np.array([0, 0, 1]))
+
+    coords_i = mol.coordinates[i]
+    coords_j = mol.coordinates[j]
+    line = coords_j - coords_i
+    axis_1 = get_perp_vector(line)
+    axis_2 = np.cross(line, axis_1)
+    axis_1 = axis_1 / np.linalg.norm(axis_1)
+    axis_2 = axis_2 / np.linalg.norm(axis_2)
+    c_r = (mol.atoms[i].vdw_radius + mol.atoms[j].vdw_radius) / 2
+    points_i = [coords_i]
+    points_j = [coords_j]
+    for k in range(6):
+        angle = 2 * np.pi * k / 6
+        dx_plus_dy = (
+            c_r * np.cos(angle) * axis_1 + c_r * np.sin(angle) * axis_2
+        )
+        points_i.append(coords_i + dx_plus_dy)
+        points_j.append(coords_j + dx_plus_dy)
+
+    other_atoms = [
+        (mol.coordinates[idx], mol.atoms[idx].vdw_radius)
+        for idx in range(mol.n_atoms)
+        if idx not in [i, j]
+    ]
+    obstruction_intervals = []
+    for point_i, point_j in zip(points_i, points_j):
+        line = point_j - point_i
+        length = np.linalg.norm(line)
+        for coord_other, vdw_other in other_atoms:
+            pass
+
+
 def create_oriented_mapped_complexes(
     *args, print_interp_geometries: bool = True
 ):
@@ -244,6 +304,7 @@ def create_oriented_mapped_complexes(
     print(f"Found *{len(all_brs)}* bond rearrangements")
 
     for k, bond_rearr in enumerate(all_brs):
+        print(f"Bond rearrangement: {repr(bond_rearr)}")
         reactant = rct_complex.copy()
         product = prd_complex.copy()
         # initial mapping sets correct connectivity but not geometry
