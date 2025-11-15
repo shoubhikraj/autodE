@@ -264,12 +264,18 @@ def calculate_bond_path_obstruction(mol, i, j):
         for idx in range(mol.n_atoms)
         if idx not in [i, j]
     ]
-    obstruction_intervals = []
+    obstruction_lens = []
     for point_i, point_j in zip(points_i, points_j):
+        obstruction_intervals = []
         line = point_j - point_i
         length = np.linalg.norm(line)
+        line /= length
         for coord_other, vdw_other in other_atoms:
-            pass
+            dist = np.linalg.norm(
+                np.cross(coord_other - point_i, coord_other - point_j)
+            )
+            if dist > vdw_other:
+                continue
 
 
 def create_oriented_mapped_complexes(
