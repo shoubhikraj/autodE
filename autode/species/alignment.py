@@ -209,13 +209,32 @@ def get_oriented_complexes(
         )
         put_unique_conf_into_list(tmp_cmplx)
 
-    return complex_orientations
+    return prune_complexes_by_fbond_feasibility(
+        complex_orientations, bond_rearr
+    )
+
+
+def prune_complexes_by_fbond_feasibility(
+    complexes,
+    bond_rearr,
+):
+    fbond_obstructions = []
+    for cmplx in complexes:
+        fbond_obstr_vals = [
+            calculate_bond_path_obstruction(cmplx, *fbond)
+            for fbond in bond_rearr.fbonds
+        ]
+        fbond_obstructions.append(
+            np.sqrt(np.mean(np.square(fbond_obstr_vals)))
+        )
+    print(fbond_obstructions)
+    return complexes
 
 
 def calculate_bond_path_obstruction(mol, i, j):
     """
-    Calculate the path obstruction between atoms i and j in a
-    molecule mol
+    Estimate how much of the cylinder between atoms i and j in
+    molecule mol are obstructed by other atoms
 
     Args:
         mol:
@@ -226,8 +245,8 @@ def calculate_bond_path_obstruction(mol, i, j):
         (float): Average path obstruction
     """
 
-    def get_perp_vector(vec):
-        """Return a perpendicular vector to x using cross products"""
+    def get_perp_vector(vec) -> np.ndarray:
+        """Return a perpendicular vector to vec using cross products"""
         dot_prods = [
             np.abs(np.dot(vec, np.array([1, 0, 0]))),
             np.abs(np.dot(vec, np.array([0, 1, 0]))),
@@ -241,6 +260,46 @@ def calculate_bond_path_obstruction(mol, i, j):
         else:
             return np.cross(vec, np.array([0, 0, 1]))
 
+    def get_length_obstruction(pt_a, pt_b, centres, radii) -> float:
+        """
+        Get the total length of the line between pt_a and pt_b obstructed
+        by spheres with specified radii and centres
+        """
+        intervals = []
+        d_ij = pt_b - pt_a
+        for centre, radius in zip(centres, radii):
+            c_to_a = pt_a - centre
+            a_fac = np.dot(d_ij, d_ij)
+            b_fac = 2 * np.dot(d_ij, c_to_a)
+            c_fac = np.dot(c_to_a, c_to_a) - radius**2
+            discr = b_fac**2 - 4 * a_fac * c_fac
+            if discr < 0:
+                continue
+            elif discr < 1e-8:
+                continue
+
+            t1 = (-b_fac + np.sqrt(discr)) / (2 * a_fac)
+            t2 = (-b_fac - np.sqrt(discr)) / (2 * a_fac)
+            t1 = np.clip(t1, 0, 1)
+            t2 = np.clip(t2, 0, 1)
+            if t1 == t2:
+                continue
+            assert t2 < t1
+            intervals.append((t2, t1))
+        if len(intervals) == 0:
+            return 0.0
+        intervals = sorted(intervals, key=lambda x: x[0])
+        total = 0.0
+        cur_start, cur_end = intervals[0]
+        for start, end in intervals[1:]:
+            if start > cur_end:
+                total += cur_end - cur_start
+                cur_start, cur_end = start, end
+            else:
+                cur_end = max(cur_end, end)
+        total += cur_end - cur_start
+        return total * np.linalg.norm(d_ij)
+
     coords_i = mol.coordinates[i]
     coords_j = mol.coordinates[j]
     line = coords_j - coords_i
@@ -248,7 +307,9 @@ def calculate_bond_path_obstruction(mol, i, j):
     axis_2 = np.cross(line, axis_1)
     axis_1 = axis_1 / np.linalg.norm(axis_1)
     axis_2 = axis_2 / np.linalg.norm(axis_2)
-    c_r = (mol.atoms[i].vdw_radius + mol.atoms[j].vdw_radius) / 2
+    # radius of cylinder if average of the two radii
+    c_r = (mol.atoms[i].covalent_radius + mol.atoms[j].covalent_radius) / 2
+    # approximate cylinder with 6 'rays' along the sides and central line
     points_i = [coords_i]
     points_j = [coords_j]
     for k in range(6):
@@ -259,23 +320,22 @@ def calculate_bond_path_obstruction(mol, i, j):
         points_i.append(coords_i + dx_plus_dy)
         points_j.append(coords_j + dx_plus_dy)
 
-    other_atoms = [
-        (mol.coordinates[idx], mol.atoms[idx].vdw_radius)
-        for idx in range(mol.n_atoms)
-        if idx not in [i, j]
-    ]
+    other_atoms, other_vdw_rs = [], []
+    for idx in range(mol.n_atoms):
+        if idx in [i, j]:
+            continue
+        other_atoms.append(mol.coordinates[idx])
+        other_vdw_rs.append(mol.atoms[idx].covalent_radius)
+
+    if len(other_atoms) == 0:
+        return 0.0
+
     obstruction_lens = []
     for point_i, point_j in zip(points_i, points_j):
-        obstruction_intervals = []
-        line = point_j - point_i
-        length = np.linalg.norm(line)
-        line /= length
-        for coord_other, vdw_other in other_atoms:
-            dist = np.linalg.norm(
-                np.cross(coord_other - point_i, coord_other - point_j)
-            )
-            if dist > vdw_other:
-                continue
+        obstruction_lens.append(
+            get_length_obstruction(point_i, point_j, other_atoms, other_vdw_rs)
+        )
+    return np.average(obstruction_lens)
 
 
 def create_oriented_mapped_complexes(
