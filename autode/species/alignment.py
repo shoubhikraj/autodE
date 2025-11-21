@@ -231,6 +231,38 @@ def prune_complexes_by_fbond_feasibility(
     return complexes
 
 
+def calculate_fbond_collision_parameter(mol, bond_rearr):
+    """
+    Obtain the
+
+    Args:
+        mol:
+        bond_rearr:
+
+    Returns:
+
+    """
+    min_dists = []
+
+    for fb1, fb2 in itertools.combinations(bond_rearr.fbonds, 2):
+        if len(set(fb1 + fb2)) == 3:
+            continue
+        coord1, coord2 = mol.coordinates[list(fb1)]
+        coord3, coord4 = mol.coordinates[list(fb2)]
+        distances = []
+        for k in range(0, 101):
+            pt = coord1 + (coord2 - coord1) * k / 100.0
+            v = coord4 - coord3
+            assert np.linalg.norm(v) > 1e-4, "Line segment too short"
+            w = pt - coord3
+            t = np.clip(w.dot(v) / v.dot(v), 0.0, 1.0)
+            q = coord3 + t * v
+            distances.append(np.linalg.norm(pt - q))
+        min_dists.append(min(distances))
+
+    return np.sqrt(np.mean(np.array(min_dists)))
+
+
 def calculate_bond_path_obstruction(mol, i, j):
     """
     Estimate how much of the cylinder between atoms i and j in
