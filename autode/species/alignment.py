@@ -219,6 +219,7 @@ def prune_complexes_by_fbond_feasibility(
     bond_rearr,
 ):
     fbond_obstructions = []
+    fbond_collisions = []
     for cmplx in complexes:
         fbond_obstr_vals = [
             calculate_bond_path_obstruction(cmplx, *fbond)
@@ -227,7 +228,11 @@ def prune_complexes_by_fbond_feasibility(
         fbond_obstructions.append(
             np.sqrt(np.mean(np.square(fbond_obstr_vals)))
         )
-    print(fbond_obstructions)
+        fbond_collisions.append(
+            calculate_fbond_collision_parameter(cmplx, bond_rearr)
+        )
+    print("Fbond obstructions", fbond_obstructions)
+    print("Fbond collisions", fbond_collisions)
     return complexes
 
 
@@ -260,7 +265,7 @@ def calculate_fbond_collision_parameter(mol, bond_rearr):
             distances.append(np.linalg.norm(pt - q))
         min_dists.append(min(distances))
 
-    return np.sqrt(np.mean(np.array(min_dists)))
+    return min(min_dists)
 
 
 def calculate_bond_path_obstruction(mol, i, j):
