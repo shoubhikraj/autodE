@@ -45,7 +45,7 @@ class AlignmentPenalty:
         self,
         cmplx: Complex,
         bond_rearr: BondRearrangement,
-        anti_subs: bool = False,
+        force_anti_subs: bool = False,
     ):
         """
         Create an object for calculating penalty with 1/r^4 repulsion
@@ -56,7 +56,7 @@ class AlignmentPenalty:
             cmplx: The complex with more than one molecule
             bond_rearr: The bond rearrangement - only take into account
                         the forming bonds
-            anti_subs: Add additional angle terms to enforce anti-substitution
+            force_anti_subs: Add additional angle terms to enforce anti-substitution
         """
         self.orig_coords = cmplx.coordinates.reshape(-1, 3)
         self.n_molecules = cmplx.n_molecules
@@ -74,10 +74,11 @@ class AlignmentPenalty:
         self.idxs_list = [
             np.array(cmplx.atom_indexes(i)) for i in range(self.n_molecules)
         ]
-        self.subst_centres = self.find_subst_centres
+        self.subst_centres = self.find_subst_centres(bond_rearr)
+        self.anti_subs = force_anti_subs
 
     @staticmethod
-    def find_subst_centres(bond_rearr):
+    def find_subst_centres(bond_rearr) -> list[tuple[int, int, int]]:
         """
         Find all substitution centres of type A-C--X
 
@@ -155,7 +156,8 @@ class AlignmentPenalty:
         Returns:
             (float): The penalty value
         """
-        _k = 0.1
+        k1 = 0.1
+        k2 = 0.1
         penalty = 0.0
         new_coords = self.get_rotated_translated_coords(x)
         for i, j in itertools.combinations(range(self.n_molecules), 2):
@@ -163,11 +165,23 @@ class AlignmentPenalty:
             mol_j_coords = new_coords[self.idxs_list[j]]
             dist_mat = distance_matrix(mol_i_coords, mol_j_coords)
             penalty += 0.5 * np.sum(np.power(dist_mat, -4))
-        # add 4th order attractive force
+        # add 2nd order attractive force
         for idx, (i, j) in enumerate(self.fbonds):
             r = np.linalg.norm(new_coords[i] - new_coords[j])
             r0 = self.vdw_sums[idx]
-            penalty += _k * (r - r0) ** 2
+            penalty += k1 * (r - r0) ** 2
+
+        if not self.anti_subs:
+            return penalty
+
+        for a, c, x in self.subst_centres:
+            v_ac = new_coords[c] - new_coords[a]
+            v_cx = new_coords[x] - new_coords[c]
+            cos_angle = (
+                v_ac.dot(v_cx) / np.linalg.norm(v_ac) / np.linalg.norm(v_cx)
+            )
+            penalty += k2 * (1 - cos_angle)
+
         return penalty
 
 
@@ -227,7 +241,7 @@ def get_oriented_complexes(
         tmp_cmplx = reactive_complex.copy()
         tmp_cmplx.conformers = Conformers()
         tmp_cmplx.coordinates = conf.coordinates
-        penalty_func = AlignmentPenalty(tmp_cmplx, bond_rearr)
+        penalty_func = AlignmentPenalty(tmp_cmplx, bond_rearr, True)
         x0 = np.zeros((6 * (cmplx.n_molecules - 1),))
         res = minimize(
             fun=penalty_func.penalty_rotate_translate,
