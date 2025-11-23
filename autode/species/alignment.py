@@ -15,6 +15,7 @@ from autode.species import (
 )
 from autode.conformers import Conformers, Conformer
 from autode.bond_rearrangement import BondRearrangement, get_bond_rearrangs
+from autode.substitution import get_substc_and_add_dummy_atoms
 from autode.geom import (
     calc_rmsd,
     get_rot_mat_euler,
@@ -40,7 +41,12 @@ class AlignmentPenalty:
     molecules, and (r-r0)**4 for the atom-pairs forming bonds
     """
 
-    def __init__(self, cmplx: Complex, bond_rearr: BondRearrangement):
+    def __init__(
+        self,
+        cmplx: Complex,
+        bond_rearr: BondRearrangement,
+        anti_subs: bool = False,
+    ):
         """
         Create an object for calculating penalty with 1/r^4 repulsion
         and (r-r0)^4 attraction. r0 is the sum of van der Waals radii
@@ -50,6 +56,7 @@ class AlignmentPenalty:
             cmplx: The complex with more than one molecule
             bond_rearr: The bond rearrangement - only take into account
                         the forming bonds
+            anti_subs: Add additional angle terms to enforce anti-substitution
         """
         self.orig_coords = cmplx.coordinates.reshape(-1, 3)
         self.n_molecules = cmplx.n_molecules
@@ -67,6 +74,29 @@ class AlignmentPenalty:
         self.idxs_list = [
             np.array(cmplx.atom_indexes(i)) for i in range(self.n_molecules)
         ]
+        self.subst_centres = self.find_subst_centres
+
+    @staticmethod
+    def find_subst_centres(bond_rearr):
+        """
+        Find all substitution centres of type A-C--X
+
+        Args:
+            bond_rearr:
+        """
+        all_subst_centres = []
+        for fbond in bond_rearr.fbonds:
+            for bbond in bond_rearr.bbonds:
+                if len(set(fbond + bbond)) != 3:
+                    continue
+
+                c_atom = list(set(fbond).intersection(bbond))[0]
+                x_atom = bbond[0] if bbond[1] == c_atom else bbond[1]
+                a_atom = fbond[0] if fbond[1] == c_atom else fbond[1]
+
+                all_subst_centres.append((a_atom, c_atom, x_atom))
+
+        return all_subst_centres
 
     def get_rotated_translated_coords(self, x: np.ndarray) -> np.ndarray:
         """
@@ -264,6 +294,9 @@ def calculate_fbond_collision_parameter(mol, bond_rearr):
             q = coord3 + t * v
             distances.append(np.linalg.norm(pt - q))
         min_dists.append(min(distances))
+
+    if len(min_dists) == 0:
+        return np.inf
 
     return min(min_dists)
 
