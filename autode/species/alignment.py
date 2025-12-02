@@ -237,9 +237,22 @@ def get_oriented_complexes(
         if min_rmsd > rmsd_prune_tol:
             complex_orientations.append(new_conf)
 
+    tmp_cmplx = reactive_complex.copy()
+    tmp_cmplx.conformers = Conformers()
     for conf in cmplx.conformers:
-        tmp_cmplx = reactive_complex.copy()
-        tmp_cmplx.conformers = Conformers()
+        tmp_cmplx.coordinates = conf.coordinates
+        # First without angle terms
+        penalty_func = AlignmentPenalty(tmp_cmplx, bond_rearr)
+        x0 = np.zeros((6 * (cmplx.n_molecules - 1),))
+        res = minimize(
+            fun=penalty_func.penalty_rotate_translate,
+            x0=x0,
+            method="l-bfgs-b",
+        )
+        tmp_cmplx.coordinates = penalty_func.get_rotated_translated_coords(
+            res.x
+        )
+        put_unique_conf_into_list(tmp_cmplx.copy())
         tmp_cmplx.coordinates = conf.coordinates
         penalty_func = AlignmentPenalty(tmp_cmplx, bond_rearr, True)
         x0 = np.zeros((6 * (cmplx.n_molecules - 1),))
@@ -251,11 +264,11 @@ def get_oriented_complexes(
         tmp_cmplx.coordinates = penalty_func.get_rotated_translated_coords(
             res.x
         )
-        put_unique_conf_into_list(tmp_cmplx)
+        put_unique_conf_into_list(tmp_cmplx.copy())
 
-    return prune_complexes_by_fbond_feasibility(
-        complex_orientations, bond_rearr
-    )
+    prune_complexes_by_fbond_feasibility(complex_orientations, bond_rearr)
+
+    return complex_orientations
 
 
 def prune_complexes_by_fbond_feasibility(
