@@ -180,7 +180,7 @@ class AlignmentPenalty:
             cos_angle = (
                 v_ac.dot(v_cx) / np.linalg.norm(v_ac) / np.linalg.norm(v_cx)
             )
-            penalty += k2 * (1 - cos_angle)
+            penalty += k2 * (1 - cos_angle) ** 1.5
 
         return penalty
 
@@ -274,9 +274,23 @@ def get_oriented_complexes(
 def prune_complexes_by_fbond_feasibility(
     complexes,
     bond_rearr,
+    fbond_obstr_thresh: float = 0.5,
+    fbond_collision_thresh: float = 0.2,
 ):
+    """
+    Remove complexes based on which conformations are too strained for a
+    reaction to take place
+
+    Args:
+        complexes:
+        bond_rearr:
+        fbond_obstr_thresh:
+        fbond_collision_thresh:
+
+    Returns:
+        (list):
+    """
     fbond_obstructions = []
-    fbond_collisions = []
     for cmplx in complexes:
         fbond_obstr_vals = [
             calculate_bond_path_obstruction(cmplx, *fbond)
@@ -285,12 +299,34 @@ def prune_complexes_by_fbond_feasibility(
         fbond_obstructions.append(
             np.sqrt(np.mean(np.square(fbond_obstr_vals)))
         )
-        fbond_collisions.append(
-            calculate_fbond_collision_parameter(cmplx, bond_rearr)
-        )
-    print("Fbond obstructions", fbond_obstructions)
-    print("Fbond collisions", fbond_collisions)
-    return complexes
+
+    # Remove all complexes which have large fbond obstruction, but keep
+    # at least one if all are removed!
+    pruned_complexes = [
+        cmplx
+        for cmplx, fbond_obstr in zip(complexes, fbond_obstructions)
+        if fbond_obstr < fbond_obstr_thresh
+    ]
+    if len(pruned_complexes) == 0:
+        min_fbond_obstr_idx = np.argmin(fbond_obstructions)
+        pruned_complexes = [complexes[min_fbond_obstr_idx]]
+
+    # similar treatment for fbond collision
+    fbond_collisions = [
+        calculate_fbond_collision_parameter(cmplx, bond_rearr)
+        for cmplx in pruned_complexes
+    ]
+    final_complexes = [
+        cmplx
+        for cmplx, fbond_coll in zip(pruned_complexes, fbond_collisions)
+        if fbond_coll > fbond_collision_thresh
+    ]
+    if len(final_complexes) == 0:
+        min_fbond_coll_idx = np.argmin(fbond_collisions)
+        final_complexes = [pruned_complexes[min_fbond_coll_idx]]
+
+    print(f"Obtained *{len(final_complexes)}* complexes after pruning")
+    return final_complexes
 
 
 def calculate_fbond_collision_parameter(mol, bond_rearr):
