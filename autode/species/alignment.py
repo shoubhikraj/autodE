@@ -584,9 +584,31 @@ def get_aligned_centred_coords(
     return coords_a, coords_b
 
 
-class InterpAtomMapper:
+def get_inv_bond_rearr(
+    reac_graph, prod_graph, bond_rearr
+) -> BondRearrangement:
     """
-    Refine atom-mapping based on the TS-like graph for all pairs of coordinates
+    Invert the bond rearrangement, taking into account the graph isomorphism
+    """
+    gm = graph_matcher(
+        graph1=reac_graph_to_prod_graph(reac_graph, bond_rearr),
+        graph2=prod_graph,
+    )
+    # TODO: clean except
+    init_mapping = next(gm.isomorphisms_iter())
+    return BondRearrangement(
+        breaking_bonds=[
+            (init_mapping[i], init_mapping[j]) for i, j in bond_rearr.fbonds
+        ],
+        forming_bonds=[
+            (init_mapping[i], init_mapping[j]) for i, j in bond_rearr.bbonds
+        ],
+    )
+
+
+class AutomorphInterpAMapper:
+    """
+    Refine atom-mapping based on graph automorphism for all pairs of coordinates
     """
 
     def __init__(
@@ -614,20 +636,53 @@ class InterpAtomMapper:
         assert isinstance(reac_graph, MolecularGraph) and isinstance(
             prod_graph, MolecularGraph
         )
-        self.reac_graph = reac_graph
+        self.reac_conv_graph = reac_graph_to_prod_graph(reac_graph, bond_rearr)
         self.prod_graph = prod_graph
         self.bond_rearr = bond_rearr
-        self.idpp_obj = IDPP(n_images=_NUM_INTERP_IMAGES, sequential=False)
+        self.inv_bond_rearr = get_inv_bond_rearr(
+            reac_graph, prod_graph, bond_rearr
+        )
+        self.idpp_obj = IDPP(
+            n_images=_NUM_INTERP_IMAGES, sequential=False
+        )  # TODO: NUM_INTERP_IMAGES
 
-    def _get_xhn_groups_and_capped_graph(self, graph):
+    def _get_xhn_groups_and_capped_graph(self, for_product=False):
         """
-        Find all -XHn groups and cap them on the graph
+        Find all -XHn groups and cap them on the graph, either for the
+        reactant or the product
         """
+        # If there are X-H bonds forming from the reactant to product (i.e. X-H bonds
+        # breaking in inverse bond rearr) then do not remove those hydrogens
+        xs_avoid_pruning = []
+        if for_product:
+            graph = self.prod_graph.copy()
+            bonds_to_check = self.inv_bond_rearr.bbonds
+        else:
+            graph = self.reac_conv_graph.copy()
+            bonds_to_check = self.bond_rearr.fbonds
+
+        for i, j in bonds_to_check:
+            atom_i, atom_j = (
+                graph.nodes[i]["atom_label"],
+                graph.nodes[j]["atom_label"],
+            )
+            if atom_i == "H" and atom_j == "H":
+                continue
+            if atom_i != "H" and atom_j != "H":
+                continue
+            h_idx = i if atom_i == "H" else j
+            x_idx = j if atom_i == "H" else i
+            if graph.degree[h_idx] != 1:
+                continue
+            xs_avoid_pruning.append(x_idx)
+
         idxs = list(graph.nodes)
         assert idxs == list(range(max(idxs) + 1))
         nodes_and_hs = {}
         for i in idxs:
             if graph.nodes[i]["atom_label"] == "H":
+                continue
+            if i in xs_avoid_pruning:
                 continue
             neighbours = list(graph.neighbors(i))
             h_neighbours = [
@@ -637,16 +692,18 @@ class InterpAtomMapper:
                 and len(list(graph.neighbors(k))) == 1  # H bonded to only one
                 and k not in self.bond_rearr.active_atoms  # H not in reaction
             ]
+            if len(h_neighbours) == 0:
+                continue
+
             if len(h_neighbours) > 0:
                 nodes_and_hs[i] = h_neighbours
 
-        new_graph = graph.copy()
         for node, hs in nodes_and_hs.items():
-            new_graph.remove_nodes_from(hs)
-            prev_label = new_graph.nodes[node]["atom_label"]
-            new_graph.nodes[node]["atom_label"] = prev_label + f"H{len(hs)}"
+            graph.remove_nodes_from(hs)
+            prev_label = graph.nodes[node]["atom_label"]
+            graph.nodes[node]["atom_label"] = prev_label + f"H{len(hs)}"
 
-        return new_graph, nodes_and_hs
+        return graph, nodes_and_hs
 
     def map_core_atoms(self) -> list[dict[int, int]]:
         """
@@ -657,14 +714,14 @@ class InterpAtomMapper:
                             core mappings for each pair of coordinates
         """
         reac_conv_core = self._get_xhn_groups_and_capped_graph(
-            reac_graph_to_prod_graph(self.reac_graph, self.bond_rearr)
+            for_product=False
         )[0]
-        prod_core = self._get_xhn_groups_and_capped_graph(self.prod_graph)[0]
+        prod_core = self._get_xhn_groups_and_capped_graph(for_product=True)[0]
         gm = graph_matcher(reac_conv_core, prod_core)
         best_core_mappings: list[dict[int, int]] = [
             dict() for _ in self.coords_pairs
         ]
-        best_path_lens = [math.inf for _ in self.coords_pairs]
+        best_path_lens = [np.inf for _ in self.coords_pairs]
         for mapping in gm.isomorphisms_iter():
             reac_idxs, prod_idxs = zip(*mapping.items())
             for k, (reac_coords, prod_coords) in enumerate(self.coords_pairs):
@@ -678,8 +735,26 @@ class InterpAtomMapper:
                     best_path_lens[k] = path_len
                     best_core_mappings[k] = mapping
         print("Finished mapping core atoms...")
-        print(best_core_mappings[0])
 
+        reac_idxs, prod_idxs = zip(*best_core_mappings[0].items())
+        path_coords = self.idpp_obj.get_path(
+            *get_aligned_centred_coords(
+                reac_coords[list(reac_idxs)],
+                prod_coords[list(prod_idxs)],
+            )
+        )
+        assert path_coords.shape[0] % (_NUM_INTERP_IMAGES - 2) == 0
+        floats_per_image = path_coords.shape[0] // (_NUM_INTERP_IMAGES - 2)
+        n_atoms = floats_per_image // 3
+
+        coords = path_coords.reshape(_NUM_INTERP_IMAGES - 2, n_atoms, 3)
+
+        # with open("idp_path_viz.trj.xyz", "w") as f:
+        #    for img in range(_NUM_INTERP_IMAGES-2):
+        #        f.write(f"{n_atoms}\n\n")
+        #        for x, y, z in coords[img]:
+        #           f.write(f"H {x:.8f} {y:.8f} {z:.8f}\n")
+        #
         return best_core_mappings
 
     def map_non_core_hs(self, coords_pair, core_map):
@@ -688,11 +763,11 @@ class InterpAtomMapper:
         core_map
         """
         reac_nodes_hs = self._get_xhn_groups_and_capped_graph(
-            reac_graph_to_prod_graph(self.reac_graph, self.bond_rearr)
+            for_product=False
         )[1]
-        prod_nodes_hs = self._get_xhn_groups_and_capped_graph(self.prod_graph)[
-            1
-        ]
+        prod_nodes_hs = self._get_xhn_groups_and_capped_graph(
+            for_product=True
+        )[1]
         all_mappings = core_map.copy()
         reac_coords, prod_coords = coords_pair
 
@@ -729,6 +804,25 @@ class InterpAtomMapper:
                 prod_coords[list(final_prod_idxs)],
             )
         )
+
+        path_coords = self.idpp_obj.get_path(
+            *get_aligned_centred_coords(
+                reac_coords[list(final_reac_idxs)],
+                prod_coords[list(final_prod_idxs)],
+            )
+        )
+        assert path_coords.shape[0] % (_NUM_INTERP_IMAGES - 2) == 0
+        floats_per_image = path_coords.shape[0] // (_NUM_INTERP_IMAGES - 2)
+        n_atoms = floats_per_image // 3
+
+        coords = path_coords.reshape(_NUM_INTERP_IMAGES - 2, n_atoms, 3)
+
+        with open("idp_path_viz.trj.xyz", "w") as f:
+            for img in range(_NUM_INTERP_IMAGES - 2):
+                f.write(f"{n_atoms}\n\n")
+                for x, y, z in coords[img]:
+                    f.write(f"H {x:.8f} {y:.8f} {z:.8f}\n")
+
         print("After H_mapping", all_mappings, "final_len=", final_len)
         return all_mappings, final_len
 
