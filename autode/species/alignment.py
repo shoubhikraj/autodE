@@ -4,8 +4,8 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.spatial import distance_matrix
 
-from autode.exceptions import NoMapping
-from autode.mol_graphs import MolecularGraph
+from networkx import weisfeiler_lehman_subgraph_hashes
+from autode.mol_graphs import MolecularGraph, is_isomorphic
 from autode.species import (
     Complex,
     ReactantComplex,
@@ -604,6 +604,105 @@ def get_inv_bond_rearr(
             (init_mapping[i], init_mapping[j]) for i, j in bond_rearr.bbonds
         ],
     )
+
+
+def choose_best_bond_rearr_from_equivs(
+    mol: Complex, br_set: list[BondRearrangement]
+):
+    """
+    From a set of equivalent bond rearrangements find the option
+    that provides the shortest distances between atoms forming
+    bonds as well as smallest steric clash in the pathway between
+    those atoms
+
+    Args:
+        mol: The reactant (or product) complex
+        br_set: List of bond rearrangements
+
+    Returns:
+        (tuple[BondRearrangement,list[Complex]]): The 'best' possible option and
+                    complexes for that bond rearrangement
+    """
+    best_complexes = None
+    best_fbond_attack = np.inf
+    for br in br_set:
+        complexes = get_oriented_complexes(mol, br)
+        # Find the min of (RMS fbond lengths + RMS bond path obstruction)
+        all_fbond_costs = [
+            np.sqrt(
+                np.mean(
+                    np.square(
+                        cmplx.distance(i, j)
+                        + calculate_bond_path_obstruction(cmplx, i, j)
+                        for i, j in br.fbonds
+                    )
+                )
+            )
+            for cmplx in complexes
+        ]
+        if min(all_fbond_costs) < best_fbond_attack:
+            best_complexes = complexes
+            best_fbond_attack = min(all_fbond_costs)
+
+    assert best_complexes is not None
+    return best_complexes
+
+
+def get_equiv_bond_rearrs(
+    graph: MolecularGraph, bond_rearr: BondRearrangement
+) -> list[BondRearrangement]:
+    """
+    Given a graph and a bond rearrangement, find all possible equivalent bond
+    rearrangements arising from symmetry (e.g. C-H activation for methane can
+    have four possible options)
+
+    Args:
+        graph:
+        bond_rearr:
+
+    Returns:
+        (list): List of equivalent bond rearrangements
+    """
+
+    def does_br_match_orig(new_br):
+        """Check if new bond rearr is truly equivalent to original"""
+        if any(graph.has_edge(i, j) for i, j in new_br.fbonds):
+            return False
+        if not all(graph.has_edge(i, j) for i, j in new_br.bbonds):
+            return False
+        if is_isomorphic(
+            reac_graph_to_prod_graph(graph, new_br),
+            reac_graph_to_prod_graph(graph, bond_rearr),
+        ):
+            return True
+
+    node_hashes = weisfeiler_lehman_subgraph_hashes(
+        graph, node_attr="atom_label", iterations=6
+    )
+    node_hashes = {k: v[-1] for k, v in node_hashes.items()}
+
+    active_idxs = bond_rearr.active_atoms
+    assert all(idx in node_hashes.keys() for idx in active_idxs)
+    # Get all nodes in graph that have matching hashes to active idx
+    active_idx_options = [
+        [k for k, v in node_hashes.items() if v == node_hashes[idx]]
+        for idx in active_idxs
+    ]
+    equiv_brs = []
+    for comb in itertools.product(*active_idx_options):
+        if len(set(comb)) != len(active_idxs):
+            continue
+        remap = dict(zip(active_idxs, comb))
+        new_bond_rearr = BondRearrangement(
+            breaking_bonds=[
+                (remap[i], remap[j]) for i, j in bond_rearr.bbonds
+            ],
+            forming_bonds=[(remap[i], remap[j]) for i, j in bond_rearr.fbonds],
+        )
+        if does_br_match_orig(new_bond_rearr):
+            equiv_brs.append(new_bond_rearr)
+
+    return equiv_brs
 
 
 class AutomorphInterpAMapper:
