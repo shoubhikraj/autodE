@@ -1,8 +1,9 @@
 import itertools
-import math
+
 import numpy as np
 from scipy.optimize import minimize
 from scipy.spatial import distance_matrix
+from typing import TYPE_CHECKING
 
 from networkx import weisfeiler_lehman_subgraph_hashes
 from autode.mol_graphs import MolecularGraph, is_isomorphic
@@ -27,8 +28,10 @@ from autode.mol_graphs import (
     reac_graph_to_prod_graph,
     graph_matcher,
 )
-from autode.log import logger
 from autode.neb.idpp import IDPP
+
+if TYPE_CHECKING:
+    from autode.species import Species
 
 
 _NUM_INTERP_IMAGES = 40
@@ -55,7 +58,6 @@ class AlignmentPenalty:
             cmplx: The complex with more than one molecule
             bond_rearr: The bond rearrangement - only take into account
                         the forming bonds
-            force_anti_subs: Add additional angle terms to enforce anti-substitution
         """
         self.orig_coords = cmplx.coordinates.reshape(-1, 3)
         self.n_molecules = cmplx.n_molecules
@@ -74,12 +76,22 @@ class AlignmentPenalty:
             np.array(cmplx.atom_indexes(i)) for i in range(self.n_molecules)
         ]
         self.subst_centres = self.find_subst_centres(bond_rearr)
-        self.anti_subs = False
+        self._anti_subs = False
 
     @property
-    def has_subs_centres(self):
+    def has_subs_centres(self) -> bool:
         """Are there substitution centres?"""
         return len(self.subst_centres) > 0
+
+    @property
+    def using_anti_subs(self) -> bool:
+        """Get whether anti-substitution terms are in use"""
+        return self._anti_subs
+
+    @using_anti_subs.setter
+    def using_anti_subs(self, value: bool):
+        """Set whether anti-substitution terms are to be used"""
+        self._anti_subs = bool(value)
 
     @staticmethod
     def find_subst_centres(bond_rearr) -> list[tuple[int, int, int]]:
@@ -175,7 +187,7 @@ class AlignmentPenalty:
             r0 = self.vdw_sums[idx]
             penalty += k1 * (r - r0) ** 2
 
-        if not self.anti_subs:
+        if not self.using_anti_subs:
             return penalty
 
         for a, c, x in self.subst_centres:
@@ -245,6 +257,7 @@ def get_oriented_complexes(
     tmp_cmplx.conformers = Conformers()
     for conf in cmplx.conformers:
         tmp_cmplx.coordinates = conf.coordinates
+
         # First without angle terms
         penalty_func = AlignmentPenalty(tmp_cmplx, bond_rearr)
         x0 = np.zeros((6 * (cmplx.n_molecules - 1),))
@@ -261,7 +274,8 @@ def get_oriented_complexes(
 
         if not penalty_func.has_subs_centres:
             continue
-        penalty_func.anti_subs = True
+        # Add angle terms
+        penalty_func.using_anti_subs = True
         x0 = np.zeros((6 * (cmplx.n_molecules - 1),))
         res = minimize(
             fun=penalty_func.penalty_rotate_translate,
@@ -279,8 +293,8 @@ def get_oriented_complexes(
 
 
 def prune_complexes_by_fbond_feasibility(
-    complexes,
-    bond_rearr,
+    complexes: list[Complex],
+    bond_rearr: BondRearrangement,
     fbond_obstr_thresh: float = 0.5,
     fbond_collision_thresh: float = 0.2,
 ):
@@ -289,10 +303,10 @@ def prune_complexes_by_fbond_feasibility(
     reaction to take place
 
     Args:
-        complexes:
-        bond_rearr:
-        fbond_obstr_thresh:
-        fbond_collision_thresh:
+        complexes: List of complexes
+        bond_rearr: The bond rearrangement
+        fbond_obstr_thresh: Threshold for fbond obstruction
+        fbond_collision_thresh: Threshold for fbond collision
 
     Returns:
         (list):
@@ -320,7 +334,7 @@ def prune_complexes_by_fbond_feasibility(
 
     # similar treatment for fbond collision
     fbond_collisions = [
-        calculate_fbond_collision_parameter(cmplx, bond_rearr)
+        get_min_fbond_collision_dist(cmplx, bond_rearr)
         for cmplx in pruned_complexes
     ]
     final_complexes = [
@@ -336,16 +350,20 @@ def prune_complexes_by_fbond_feasibility(
     return final_complexes
 
 
-def calculate_fbond_collision_parameter(mol, bond_rearr):
+def get_min_fbond_collision_dist(
+    mol: "Species", bond_rearr: BondRearrangement
+):
     """
-    Obtain the
+    Find the lowest distance between pairs of forming bonds which do
+    not share any atom. This indicates incorrectly oriented complexes
+    where forming bonds would collide during reaction
 
     Args:
-        mol:
-        bond_rearr:
+        mol: The species or complex
+        bond_rearr: The bond rearrangement
 
     Returns:
-
+        (float): The minimum distance of forming bond collision
     """
     min_dists = []
 
@@ -355,10 +373,12 @@ def calculate_fbond_collision_parameter(mol, bond_rearr):
         coord1, coord2 = mol.coordinates[list(fb1)]
         coord3, coord4 = mol.coordinates[list(fb2)]
         distances = []
+        # Represent bond line segment as 101 points and obtain
+        # minimum distance from each point to the other bond
         for k in range(0, 101):
             pt = coord1 + (coord2 - coord1) * k / 100.0
             v = coord4 - coord3
-            assert np.linalg.norm(v) > 1e-4, "Line segment too short"
+            assert np.linalg.norm(v) > 1e-4, f"Bond {fb2} too short"
             w = pt - coord3
             t = np.clip(w.dot(v) / v.dot(v), 0.0, 1.0)
             q = coord3 + t * v
@@ -606,6 +626,9 @@ def get_inv_bond_rearr(
     )
 
 
+np_rms = lambda x: np.sqrt(np.mean(np.square(x)))
+
+
 def choose_best_bond_rearr_from_equivs(
     mol: Complex, br_set: list[BondRearrangement]
 ):
@@ -628,18 +651,15 @@ def choose_best_bond_rearr_from_equivs(
     for br in br_set:
         complexes = get_oriented_complexes(mol, br)
         # Find the min of (RMS fbond lengths + RMS bond path obstruction)
-        all_fbond_costs = [
-            np.sqrt(
-                np.mean(
-                    np.square(
-                        cmplx.distance(i, j)
-                        + calculate_bond_path_obstruction(cmplx, i, j)
-                        for i, j in br.fbonds
-                    )
+        all_fbond_costs = []
+        for cmplx in complexes:
+            all_fbond_costs.append(
+                np_rms(
+                    cmplx.distance(i, j)
+                    + calculate_bond_path_obstruction(cmplx, i, j)
+                    for i, j in br.fbonds
                 )
             )
-            for cmplx in complexes
-        ]
         if min(all_fbond_costs) < best_fbond_attack:
             best_complexes = complexes
             best_fbond_attack = min(all_fbond_costs)
