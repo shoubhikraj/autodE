@@ -467,7 +467,7 @@ def calculate_bond_path_obstruction(mol, i, j):
     axis_2 = np.cross(line, axis_1)
     axis_1 = axis_1 / np.linalg.norm(axis_1)
     axis_2 = axis_2 / np.linalg.norm(axis_2)
-    # radius of cylinder if average of the two radii
+    # radius of cylinder is average of the two radii
     c_r = (mol.atoms[i].covalent_radius + mol.atoms[j].covalent_radius) / 2
     # approximate cylinder with 6 'rays' along the sides and central line
     points_i = [coords_i]
@@ -669,7 +669,7 @@ def choose_best_bond_rearr_from_equivs(
 
 
 def get_equiv_bond_rearrs(
-    graph: MolecularGraph, bond_rearr: BondRearrangement
+    graph: MolecularGraph, bond_rearr: BondRearrangement, depth: int = 6
 ) -> list[BondRearrangement]:
     """
     Given a graph and a bond rearrangement, find all possible equivalent bond
@@ -679,6 +679,8 @@ def get_equiv_bond_rearrs(
     Args:
         graph:
         bond_rearr:
+        depth: How many layers of neighbour information to consider for
+                detection of symmetry
 
     Returns:
         (list): List of equivalent bond rearrangements
@@ -697,7 +699,7 @@ def get_equiv_bond_rearrs(
             return True
 
     node_hashes = weisfeiler_lehman_subgraph_hashes(
-        graph, node_attr="atom_label", iterations=6
+        graph, node_attr="atom_label", iterations=depth
     )
     node_hashes = {k: v[-1] for k, v in node_hashes.items()}
 
