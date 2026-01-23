@@ -208,7 +208,7 @@ namespace autode {
         }
     }
 
-    void IDPPotential::calc_idpp_engrad(const int idx, Image& img) const {
+    void IDPPotential::calc_potential_engrad(const int idx, Image& img) const {
         /* Calculate the IDPP energy/gradient for the
          * supplied image
          *
@@ -635,8 +635,8 @@ namespace autode {
                                 << idxs.left << ", " << idxs.right << " ===\n";
 
         while (iter < maxiter) {
-            pot.calc_idpp_engrad(idxs.left, neb.images[idxs.left]);
-            pot.calc_idpp_engrad(idxs.right, neb.images[idxs.right]);
+            pot.calc_potential_engrad(idxs.left, neb.images[idxs.left]);
+            pot.calc_potential_engrad(idxs.right, neb.images[idxs.right]);
             neb.images[idxs.left].update_neb_grad(
                 neb.images[idxs.left - 1], neb.images[idxs.right], false
             );
@@ -683,7 +683,7 @@ namespace autode {
 
         while (iter < maxiter) {
             for (int k = 1; k < neb.n_images - 1; k++) {
-                pot.calc_idpp_engrad(k, neb.images[k]);
+                pot.calc_potential_engrad(k, neb.images[k]);
             }
             for (int k = 1; k < neb.n_images - 1; k++) {
                 neb.images[k].update_neb_grad(

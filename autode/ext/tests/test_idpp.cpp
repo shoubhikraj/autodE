@@ -24,7 +24,7 @@ TEST_CASE("IDPP energy and gradient") {
     auto img_1 = Image(2, 1.0);
     img_1.coords = coords_1;
 
-    pot.calc_idpp_engrad(1, img_1);
+    pot.calc_potential_engrad(1, img_1);
     // S =                w ^ -4 * (d_id - d) ^ 2
     // d_id = 0.5 + (0.7 - 0.5) * (1 / 2), d = 0.55
     double known_val = std::pow(0.55, -4) * std::pow((0.5 + 0.2 / 2) - 0.55, 2);
@@ -39,7 +39,7 @@ TEST_CASE("IDPP energy and gradient") {
 
     for (int i = 0; i < 6; i++) {
         img_1.coords[i] += shift;
-        pot.calc_idpp_engrad(1, img_1);
+        pot.calc_potential_engrad(1, img_1);
         num_grad[i] = (img_1.en - energy) / shift;
         img_1.coords[i] -= shift;
     }

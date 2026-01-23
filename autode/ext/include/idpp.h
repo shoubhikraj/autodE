@@ -63,7 +63,7 @@ namespace autode
                                const arrx::array1d& final_coords,
                                const int num_images);
 
-        void calc_idpp_engrad(const int idx, Image& img) const;
+        void calc_potential_engrad(const int idx, Image& img) const;
     };
 
     class NEB {
