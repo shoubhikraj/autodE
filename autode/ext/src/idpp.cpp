@@ -772,7 +772,7 @@ namespace autode {
         return neb;
     }
 
-    void calculate_idpp_path(double* init_coords_ptr,
+    std::vector<double> calculate_idpp_path(double* init_coords_ptr,
                             double* final_coords_ptr,
                             int coords_len,
                             int n_images,
@@ -819,6 +819,16 @@ namespace autode {
         for (int i = 0; i < req_dim; i++) {
             all_coords_ptr[i] = all_coords[i];
         }
+
+        // Get the idpp energies
+        std::vector<double> energies;
+        energies.reserve(n_images);
+
+        for (auto& img : neb.images) {
+            energies.push_back(img.en);
+        }
+
+        return energies;
     }
 
     double get_path_length(double *init_coords_ptr,
@@ -859,6 +869,26 @@ namespace autode {
                    arrx::norm_l2(neb.images[k].coords - neb.images[k+1].coords);
         }
         return dist;
+    }
+
+    std::vector<double> get_energies(double *init_coords_ptr,
+                                     double *final_coords_ptr,
+                                     int coords_len,
+                                     int n_images,
+                                     const IdppParams& params) {
+        /* Get NEB energies */
+        ensure(coords_len > 0, "Incorrect coordinates length");
+
+        auto init_coords = arrx::array1d(init_coords_ptr, coords_len);
+        auto final_coords = arrx::array1d(final_coords_ptr, coords_len);
+
+        auto neb = calculate_neb(
+            std::move(init_coords), std::move(final_coords),
+            n_images, params, arrx::array1d(), false
+        );
+
+
+
     }
 
     void relax_path(double* all_coords_ptr,

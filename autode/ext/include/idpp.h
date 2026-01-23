@@ -162,7 +162,7 @@ namespace autode
                       const arrx::array1d& interm_coords,
                       const bool load_from_interm);
 
-    void calculate_idpp_path(double* init_coords_ptr,
+    std::vector<double> calculate_idpp_path(double* init_coords_ptr,
                              double* final_coords_ptr,
                              int coords_len,
                              int n_images,

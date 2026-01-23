@@ -89,7 +89,7 @@ def get_interpolated_path(
     cdef double [:] img_coords_view = interm_img_coordinates
     cdef IdppParams params = handle_kwargs(kwargs)
 
-    calculate_idpp_path(
+    energies = calculate_idpp_path(
         &init_view[0],
         &final_view[0],
         int(coords_len),
@@ -97,7 +97,7 @@ def get_interpolated_path(
         &img_coords_view[0],
         params,
     )
-    return interm_img_coordinates
+    return interm_img_coordinates, energies
 
 def get_interp_path_length(
     init_coords,
