@@ -148,23 +148,26 @@ namespace autode {
     IDPPotential::IDPPotential(const arrx::array1d& init_coords,
                                  const arrx::array1d& final_coords,
                                  const int num_images)
-     : n_images(num_images) {
+    {
         /* Create an IDPP potential
-         *
-         * Arguments:
-         *
-         *  init_coords: Initial coordinates
-         *
-         *  final_coords: Final coordinates
-         *
-         *  num_images: Number of images to interpolate
-         */
+        *
+        * Arguments:
+        *
+        *  init_coords: Initial coordinates
+        *
+        *  final_coords: Final coordinates
+        *
+        *  num_images: Number of images to interpolate
+        */
         ensure(init_coords.size() == final_coords.size(),
                 "Initial and final geometries must have same number of atoms");
         ensure(init_coords.size() > 0 && init_coords.size() % 3 == 0,
                 "Wrong size of coordinates!");
         ensure(num_images > 2, "Must have more than 2 images");
+
+        // Initialize base class members
         n_atoms = static_cast<int>(init_coords.size()) / 3;
+        n_images = num_images;
 
         // calculate pairwise distances
         const int n_dists = (n_atoms * (n_atoms - 1)) / 2;  // nC2 = [n(n-1)]/2
@@ -308,7 +311,7 @@ namespace autode {
         images_prepared = true;
     }
 
-    void NEB::fill_sequentially(const IDPPotential& pot,
+    void NEB::fill_sequentially(const InterpPotentialBase& pot,
                                 const int add_maxiter,
                                 const double add_maxgtol) {
         /* Fill the NEB path sequentially */
@@ -615,7 +618,7 @@ namespace autode {
 
     int BBMinimiser::min_frontier(NEB& neb,
                                   const NEB::frontier_pair idxs,
-                                  const IDPPotential& pot) {
+                                  const InterpPotentialBase& pot) {
         /* Minimise the frontier images of a NEB using the Barzilai-Borwein
          * method
          *
@@ -671,7 +674,7 @@ namespace autode {
         }
     }
 
-    void BBMinimiser::min_path(NEB& neb, const IDPPotential& pot) {
+    void BBMinimiser::min_path(NEB& neb, const InterpPotentialBase& pot) {
         /* Minimise a series of NEB images using the IDPP potential
          *
          * Arguments:

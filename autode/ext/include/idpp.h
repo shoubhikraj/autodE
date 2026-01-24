@@ -48,12 +48,25 @@ namespace autode
         double max_g() const;
     };
 
-    class IDPPotential {
+
+    class InterpPotentialBase {
+        /* Base class for any interpolation potential */
+
+        protected:
+            int n_atoms = 0;   // Total number of atoms
+            int n_images = 0;  // Total number of images
+
+        public:
+            // Polymorphic base must have virtual descriptor
+            virtual ~InterpPotentialBase() = default;
+
+            virtual void calc_potential_engrad(int idx, Image& img) const = 0;
+    };
+
+    class IDPPotential : public InterpPotentialBase {
         /* The IDPP potential, using weighted interatomic distances */
 
     private:
-        int n_atoms;  // Total number of atoms
-        int n_images;  // Total number of images
         std::vector<arrx::array1d> all_target_ds; // interpolated bond distances
 
     public:
@@ -63,7 +76,7 @@ namespace autode
                                const arrx::array1d& final_coords,
                                const int num_images);
 
-        void calc_potential_engrad(const int idx, Image& img) const;
+        void calc_potential_engrad(int idx, Image& img) const override;
     };
 
     class NEB {
@@ -88,7 +101,7 @@ namespace autode
 
         void fill_linear_interp();
 
-        void fill_sequentially(const IDPPotential& pot,
+        void fill_sequentially(const InterpPotentialBase& pot,
                                const int add_maxiter,
                                const double add_maxgtol);
 
@@ -150,9 +163,9 @@ namespace autode
 
         int min_frontier(NEB& neb,
                          const NEB::frontier_pair idxs,
-                         const IDPPotential& pot);
+                         const InterpPotentialBase& pot);
 
-        void min_path(NEB& neb, const IDPPotential& pot);
+        void min_path(NEB& neb, const InterpPotentialBase& pot);
     };
 
     NEB calculate_neb(arrx::array1d init_coords,
