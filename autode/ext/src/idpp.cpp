@@ -262,6 +262,173 @@ namespace autode {
         }
     }
 
+    double ScaledInterAtomPotential::get_r_e(int atom_i, int atom_j) const {
+        /* Get the sum of covalent radii for atoms i and j */
+        return cov_radii[atom_i] + cov_radii[atom_j];
+    }
+
+    double ScaledInterAtomPotential::calc_q(double r_ij, double r_e) const {
+        /* Calculate scaled distance q_ij from interatomic distance r_ij
+         * and equilibrium distance r_e
+         *
+         * q_ij = exp(-aleph * (r_ij - r_e) / r_e) + bet * r_e / r_ij
+         */
+        double scaled_diff = (r_ij - r_e) / r_e;
+        return std::exp(-aleph * scaled_diff) + bet * r_e / r_ij;
+    }
+
+    double ScaledInterAtomPotential::calc_dq_dr(double r_ij, double r_e) const {
+        /* Calculate derivative dq/dr_ij
+         *
+         * dq/dr = -aleph/r_e * exp(-aleph * (r_ij - r_e) / r_e)
+         *         - bet * r_e / r_ij^2
+         */
+        double scaled_diff = (r_ij - r_e) / r_e;
+        double exp_term = -aleph / r_e * std::exp(-aleph * scaled_diff);
+        double inv_term = -bet * r_e / (r_ij * r_ij);
+        return exp_term + inv_term;
+    }
+
+    ScaledInterAtomPotential::ScaledInterAtomPotential(
+            const arrx::array1d& init_coords,
+            const arrx::array1d& final_coords,
+            const int num_images,
+            const std::vector<double>& cov_rs) {
+        /* Create a scaled interatomic distance potential
+         *
+         * Arguments:
+         *
+         *  init_coords: Initial coordinates
+         *
+         *  final_coords: Final coordinates
+         *
+         *  num_images: Number of images to interpolate
+         *
+         *  cov_rs: Covalent radii for each atom
+         *
+         *  aleph_val: Exponential scaling parameter (default 1.0)
+         *
+         *  bet_val: Inverse distance scaling parameter (default 1.0)
+         */
+        ensure(init_coords.size() == final_coords.size(),
+                "Initial and final geometries must have same number of atoms");
+        ensure(init_coords.size() > 0 && init_coords.size() % 3 == 0,
+                "Wrong size of coordinates!");
+        ensure(num_images > 2, "Must have more than 2 images");
+
+        // Initialize base class members
+        n_atoms = static_cast<int>(init_coords.size()) / 3;
+        n_images = num_images;
+
+        ensure(static_cast<int>(cov_rs.size()) == n_atoms,
+                "Covalent radii vector size must match number of atoms");
+
+        // Copy covalent radii
+        cov_radii = arrx::array1d(cov_rs);
+
+        // Calculate pairwise scaled distances
+        const int n_pairs = (n_atoms * (n_atoms - 1)) / 2;
+        arrx::array1d init_qs = arrx::zeros(n_pairs);
+        arrx::array1d final_qs = arrx::zeros(n_pairs);
+
+        size_t counter = 0;
+        for (int atom_i = 0; atom_i < n_atoms; atom_i++) {
+            for (int atom_j = 0; atom_j < n_atoms; atom_j++) {
+                if (atom_i >= atom_j) continue;
+
+                double r_e = get_r_e(atom_i, atom_j);
+
+                // Calculate for initial coordinates
+                auto coord_i = arrx::slice(
+                    init_coords, atom_i * 3, atom_i * 3 + 3
+                );
+                auto coord_j = arrx::slice(
+                    init_coords, atom_j * 3, atom_j * 3 + 3
+                );
+                double r_ij = arrx::norm_l2(coord_i - coord_j);
+                init_qs[counter] = calc_q(r_ij, r_e);
+
+                // Calculate for final coordinates
+                auto coord_i_2 = arrx::slice(
+                    final_coords, atom_i * 3, atom_i * 3 + 3
+                );
+                auto coord_j_2 = arrx::slice(
+                    final_coords, atom_j * 3, atom_j * 3 + 3
+                );
+                r_ij = arrx::norm_l2(coord_i_2 - coord_j_2);
+                final_qs[counter] = calc_q(r_ij, r_e);
+
+                counter++;
+            }
+        }
+
+        // Interpolate scaled distances
+        all_target_qs.clear();
+        for (int k = 0; k < num_images; k++) {
+            double factor = static_cast<double>(k)
+                            / static_cast<double>(num_images - 1);
+            arrx::array1d target_qs = init_qs + (final_qs - init_qs) * factor;
+            all_target_qs.push_back(target_qs);
+        }
+    }
+
+    void ScaledInterAtomPotential::calc_potential_engrad(const int idx,
+                                                          Image& img) const {
+        /* Calculate the scaled interatomic distance potential energy/gradient
+         * for the supplied image
+         *
+         * Arguments:
+         *   idx: The index of the image
+         *
+         *   img: The image for which to calculate the energy/grad.
+         *        The image object is modified in-place
+         */
+
+        if (idx <= 0 || idx >= n_images - 1) return;
+
+        img.en = 0.0;
+        img.grad.fill(0.0);
+
+        // Pointer to items of target_qs[idx]
+        auto target_q_ptr = all_target_qs[idx].begin();
+
+        arrx::array1d dist_vec;
+        for (int atom_i = 0; atom_i < n_atoms; atom_i++) {
+            for (int atom_j = 0; atom_j < n_atoms; atom_j++) {
+                if (atom_i >= atom_j) continue;
+
+                auto coord_i = arrx::slice(
+                    img.coords, atom_i * 3, atom_i * 3 + 3
+                );
+                auto coord_j = arrx::slice(
+                    img.coords, atom_j * 3, atom_j * 3 + 3
+                );
+                arrx::noalias(dist_vec) = coord_i - coord_j;
+                double r_ij = arrx::norm_l2(dist_vec);
+                double r_e = get_r_e(atom_i, atom_j);
+
+                // Calculate current scaled distance
+                double q_ij = calc_q(r_ij, r_e);
+                double q_target = *target_q_ptr;
+
+                // Energy: E = (q_ij - q_target)^2
+                double delta_q = q_ij - q_target;
+                img.en += delta_q * delta_q;
+
+                // Gradient: dE/dr_i = 2 * (q_ij - q_target) * dq/dr_ij * dr_ij/dr_i
+                // where dr_ij/dr_i = (r_i - r_j) / r_ij
+                double dq_dr = calc_dq_dr(r_ij, r_e);
+                double grad_prefac = 2.0 * delta_q * dq_dr / r_ij;
+
+                dist_vec *= grad_prefac;
+                arrx::slice(img.grad, atom_i * 3, atom_i * 3 + 3) += dist_vec;
+                arrx::slice(img.grad, atom_j * 3, atom_j * 3 + 3) -= dist_vec;
+
+                target_q_ptr++;
+            }
+        }
+    }
+
     NEB::NEB(arrx::array1d init_coords,
              arrx::array1d final_coords,
              double k,

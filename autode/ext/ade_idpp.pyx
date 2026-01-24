@@ -26,12 +26,16 @@ cdef IdppParams handle_kwargs(kwargs) except *:
         (IdppParams):
     """
     cdef IdppParams calc_params
-    calc_params.k_spr = kwargs.get('k_spr')
-    calc_params.sequential = kwargs.get('sequential')
-    calc_params.rmsgtol = kwargs.get('rms_gtol')
-    calc_params.maxiter = kwargs.get('maxiter')
-    calc_params.add_img_maxgtol = kwargs.get('add_img_maxgtol')
-    calc_params.add_img_maxiter = kwargs.get('add_img_maxiter')
+    calc_params.k_spr = kwargs['k_spr']
+    calc_params.sequential = kwargs['sequential']
+    calc_params.rmsgtol = kwargs['rms_gtol']
+    calc_params.maxiter = kwargs['maxiter']
+    calc_params.add_img_maxgtol = kwargs['add_img_maxgtol']
+    calc_params.add_img_maxiter = kwargs['add_img_maxiter']
+
+    covalent_radii = kwargs.get("covalent_radii", None)
+    if covalent_radii is not None:
+        calc_params.cov_rs = covalent_radii
 
     # change the debug option according to current logging level
     debug_print = logger.isEnabledFor(logging.DEBUG)
@@ -63,6 +67,7 @@ def get_interpolated_path(
                         new images (only for sequential)
         add_img_maxiter (int): Max. number of iters for adding new
                         images (only for sequential)
+        covalent_radii (list[float]): Covalent radii of all atoms
     Returns:
         (np.ndarray): Numpy array of coordinates of the
                     intermediate images in the path
@@ -121,6 +126,8 @@ def get_interp_path_length(
                         new images (only for sequential)
         add_img_maxiter (int): Max. number of iters for adding new
                         images (only for sequential)
+        covalent_radii (list[float]): Covalent radii of all atoms
+
     Returns:
         (float): Length of the interpolated path
     """
@@ -168,6 +175,8 @@ def get_relaxed_path(
                         new images (only for sequential)
         add_img_maxiter (int): Max. number of iters for adding new
                         images (only for sequential)
+        covalent_radii (list[float]): Covalent radii of all atoms
+
     """
     all_coords_cont = np.ascontiguousarray(
         all_coords.ravel(), dtype=np.double

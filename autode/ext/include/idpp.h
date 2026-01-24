@@ -16,6 +16,7 @@ namespace autode
         int maxiter; // maxiter for path
         double add_img_maxgtol; // Max gradient tol. for adding img
         double add_img_maxiter; // maxiter for each image addition
+        std::vector<double> cov_rs; // covalent radii for all atoms
 
         void check_validity() const;
     };
@@ -75,6 +76,35 @@ namespace autode
         explicit IDPPotential(const arrx::array1d& init_coords,
                                const arrx::array1d& final_coords,
                                const int num_images);
+
+        void calc_potential_engrad(int idx, Image& img) const override;
+    };
+
+    class ScaledInterAtomPotential : public InterpPotentialBase {
+        /* Scaled interatomic distance potential using exponential scaling */
+
+    private:
+        std::vector<arrx::array1d> all_target_qs; // interpolated scaled distances
+        arrx::array1d cov_radii; // covalent radii for each atom
+        const double aleph = 1.7; // exponential scaling parameter
+        const double bet = 0.01;   // inverse distance scaling parameter
+
+        // Helper function to calculate r_ij_e (sum of covalent radii)
+        double get_r_e(int atom_i, int atom_j) const;
+
+        // Helper function to calculate q_ij from r_ij and r_ij_e
+        double calc_q(double r_ij, double r_e) const;
+
+        // Helper function to calculate dq/dr_ij
+        double calc_dq_dr(double r_ij, double r_e) const;
+
+    public:
+        ScaledInterAtomPotential() = default;
+
+        explicit ScaledInterAtomPotential(const arrx::array1d& init_coords,
+                                           const arrx::array1d& final_coords,
+                                           const int num_images,
+                                           const std::vector<double>& cov_rs);
 
         void calc_potential_engrad(int idx, Image& img) const override;
     };
