@@ -1,6 +1,6 @@
 import numpy as np
 
-from typing import List
+from typing import Optional
 from autode.ext.ade_idpp import (
     get_interpolated_path,
     get_interp_path_length,
@@ -32,6 +32,7 @@ class IDPP:
         maxiter: int = 1000,
         add_img_maxgtol: float = 2e-3,
         add_img_maxiter: int = 200,
+        cov_radii: Optional[list[float]] = None,
     ):
         """
         Initialise an IDPP calculation
@@ -44,6 +45,7 @@ class IDPP:
             maxiter: Maximum number of iterations for path
             add_img_maxgtol: Maximum gradient tolerance for adding images
             add_img_maxiter: Maximum number of iterations for adding image
+            cov_radii: Covalent radii of atoms
         """
         self._n_images = int(n_images)
         assert self._n_images > 2
@@ -53,6 +55,11 @@ class IDPP:
         self._maxiter = int(maxiter)
         self._add_img_maxgtol = float(add_img_maxgtol)
         self._add_img_maxiter = int(add_img_maxiter)
+        if cov_radii is None:
+            self._covalent_radii = None
+        else:
+            assert all(r > 0 for r in cov_radii)
+            self._covalent_radii = [float(r) for r in cov_radii]
 
     def get_path(
         self, init_coords: np.ndarray, final_coords: np.ndarray
@@ -83,6 +90,7 @@ class IDPP:
             maxiter=self._maxiter,
             add_img_maxgtol=self._add_img_maxgtol,
             add_img_maxiter=self._add_img_maxiter,
+            covalent_radii=self._covalent_radii,
         )
 
     def get_path_length(
@@ -108,9 +116,10 @@ class IDPP:
             maxiter=self._maxiter,
             add_img_maxgtol=self._add_img_maxgtol,
             add_img_maxiter=self._add_img_maxiter,
+            covalent_radii=self._covalent_radii,
         )
 
-    def relax_path(self, coords_list: List[np.ndarray]) -> List[np.ndarray]:
+    def relax_path(self, coords_list: list[np.ndarray]) -> list[np.ndarray]:
         """
         Relax the set of coordinates using the IDPP method
 
@@ -135,6 +144,7 @@ class IDPP:
             maxiter=self._maxiter,
             add_img_maxgtol=self._add_img_maxgtol,
             add_img_maxiter=self._add_img_maxiter,
+            covalent_radii=self._covalent_radii,
         )
         for i in range(n_images):
             coords_list[i] = all_coords[i * coords_len : (i + 1) * coords_len]

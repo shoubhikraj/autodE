@@ -500,7 +500,11 @@ class NEB:
         elif num < 2:
             raise ValueError("Cannot construct a NEB with less than 3 images")
 
-        idpp = IDPP(n_images=num, sequential=sidpp)
+        idpp = IDPP(
+            n_images=num,
+            sequential=sidpp,
+            cov_radii=[at.covalent_radius for at in initial.atoms],
+        )
         interm_coords = idpp.get_path(initial.coordinates, final.coordinates)[
             0
         ]
