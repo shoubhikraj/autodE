@@ -229,6 +229,8 @@ namespace autode {
 
         // pointer to items of target_ds[idx]
         auto target_d_ptr = all_target_ds[idx].begin();
+        auto init_d_ptr = all_target_ds[0].begin();
+        auto final_d_ptr = all_target_ds[n_images-1].begin();
 
         arrx::array1d dist_vec;
         for (int atom_i = 0; atom_i < n_atoms; atom_i++) {
@@ -242,22 +244,28 @@ namespace autode {
                 );
                 arrx::noalias(dist_vec) = coord_i - coord_j;
                 double dist = arrx::norm_l2(dist_vec);
-                double dist_pow_2 = dist * dist;
-                double dist_pow_4 = dist_pow_2 * dist_pow_2;
-                double dist_pow_5 = dist_pow_4 * dist;
-                double dist_pow_6 = dist_pow_5 * dist;
+                double target_d = *target_d_ptr;
 
-                // energy terms
-                img.en += 1.0 / dist_pow_4 * std::pow(*target_d_ptr - dist, 2);
+                double target_d_pow_4 = std::pow(target_d, 4.0);
 
-                auto grad_prefac = -2.0 * 1.0 / dist_pow_4
-                        + 6.0 * (*target_d_ptr) / dist_pow_5
-                        - 4.0 * std::pow(*target_d_ptr, 2) / dist_pow_6;
+                // weighting factor
+                auto d_i_f = std::abs(*init_d_ptr - *final_d_ptr);
+                auto wt = 0.5 + 0.5 * std::exp(-2.0 * d_i_f);
+
+                // energy: E = 1/d^4 * (r - d)^2
+                img.en += wt * (1.0 / target_d_pow_4) * std::pow(dist - target_d, 2);
+
+                // gradient: dE/dr_i = 1/d^4 * 2(r - d) * dr/dr_i
+                // where dr/dr_i = (r_i - r_j) / r
+                auto grad_prefac = wt * (2.0 / target_d_pow_4) * (dist - target_d) / dist;
+
                 // gradient terms
                 dist_vec *= grad_prefac;
                 arrx::slice(img.grad, atom_i * 3, atom_i * 3 + 3) += dist_vec;
                 arrx::slice(img.grad, atom_j * 3, atom_j * 3 + 3) -= dist_vec;
                 target_d_ptr++;
+                init_d_ptr++;
+                final_d_ptr++;
             }
         }
     }
