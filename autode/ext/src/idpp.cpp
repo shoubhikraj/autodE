@@ -252,9 +252,10 @@ namespace autode {
                 img.en += (*d_wt_ptr) * 1.0 / dist_pow_4
                                             * std::pow(*target_d_ptr - dist, 2);
 
-                auto grad_prefac = (*d_wt_ptr) * (-2.0) / dist_pow_4
+                auto grad_prefac = (-2.0) / dist_pow_4
                         + 6.0 * (*target_d_ptr) / dist_pow_5
                         - 4.0 * std::pow(*target_d_ptr, 2) / dist_pow_6;
+                grad_prefac *= (*d_wt_ptr)
 
                 // gradient terms
                 dist_vec *= grad_prefac;
