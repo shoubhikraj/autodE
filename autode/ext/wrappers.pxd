@@ -106,7 +106,7 @@ cdef extern from "include/idpp.h" namespace "autode":
         double add_img_maxiter
 
 cdef extern from "include/idpp.h" namespace "autode":
-    void calculate_idpp_path(double* init_coords_ptr,
+    vector[double] calculate_idpp_path(double* init_coords_ptr,
                              double* final_coords_ptr,
                              int coords_len,
                              int n_images,

@@ -54,6 +54,7 @@ namespace autode
         int n_atoms;  // Total number of atoms
         int n_images;  // Total number of images
         std::vector<arrx::array1d> all_target_ds; // interpolated bond distances
+        std::vector<double> d_wts; // weights for each bond
 
     public:
         IDPPotential() = default;
@@ -161,7 +162,7 @@ namespace autode
                       const arrx::array1d& interm_coords,
                       const bool load_from_interm);
 
-    void calculate_idpp_path(double* init_coords_ptr,
+    std::vector<double> calculate_idpp_path(double* init_coords_ptr,
                              double* final_coords_ptr,
                              int coords_len,
                              int n_images,

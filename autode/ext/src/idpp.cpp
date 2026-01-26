@@ -143,8 +143,8 @@ namespace autode {
 
 
     IDPPotential::IDPPotential(const arrx::array1d& init_coords,
-                                 const arrx::array1d& final_coords,
-                                 const int num_images)
+                               const arrx::array1d& final_coords,
+                               const int num_images)
      : n_images(num_images) {
         /* Create an IDPP potential
          *
@@ -167,6 +167,7 @@ namespace autode {
         const int n_dists = (n_atoms * (n_atoms - 1)) / 2;  // nC2 = [n(n-1)]/2
         arrx::array1d init_ds = arrx::zeros(n_dists);
         arrx::array1d final_ds = arrx::zeros(n_dists);
+        d_wts.resize(n_dists);
 
         size_t counter = 0;
         for (int atom_i = 0; atom_i < n_atoms; atom_i++) {
@@ -190,6 +191,11 @@ namespace autode {
                 );
                 dist = arrx::norm_l2(coord_i_2 - coord_j_2);
                 final_ds[counter] = dist;
+
+                // Bonds that do not change should have higher weights
+                double delta_d = std::abs(final_ds[counter] - init_ds[counter]);
+                d_wts[counter] = 1.0 + std::exp(-2.0 * delta_d);
+
                 counter++;
             }
         }
@@ -223,6 +229,7 @@ namespace autode {
 
         // pointer to items of target_ds[idx]
         auto target_d_ptr = all_target_ds[idx].begin();
+        auto d_wt_ptr = d_wts.begin();
 
         arrx::array1d dist_vec;
         for (int atom_i = 0; atom_i < n_atoms; atom_i++) {
@@ -242,16 +249,19 @@ namespace autode {
                 double dist_pow_6 = dist_pow_5 * dist;
 
                 // energy terms
-                img.en += 1.0 / dist_pow_4 * std::pow(*target_d_ptr - dist, 2);
+                img.en += (*d_wt_ptr) * 1.0 / dist_pow_4
+                                            * std::pow(*target_d_ptr - dist, 2);
 
-                auto grad_prefac = -2.0 * 1.0 / dist_pow_4
+                auto grad_prefac = (*d_wt_ptr) * (-2.0) / dist_pow_4
                         + 6.0 * (*target_d_ptr) / dist_pow_5
                         - 4.0 * std::pow(*target_d_ptr, 2) / dist_pow_6;
+
                 // gradient terms
                 dist_vec *= grad_prefac;
                 arrx::slice(img.grad, atom_i * 3, atom_i * 3 + 3) += dist_vec;
                 arrx::slice(img.grad, atom_j * 3, atom_j * 3 + 3) -= dist_vec;
                 target_d_ptr++;
+                d_wt_ptr++;
             }
         }
     }
@@ -778,7 +788,7 @@ namespace autode {
         return neb;
     }
 
-    void calculate_idpp_path(double* init_coords_ptr,
+    std::vector<double> calculate_idpp_path(double* init_coords_ptr,
                             double* final_coords_ptr,
                             int coords_len,
                             int n_images,
@@ -826,6 +836,14 @@ namespace autode {
         for (int i = 0; i < req_dim; i++) {
             all_coords_ptr[i] = all_coords[i];
         }
+
+        // obtain the idpp energies of the path
+        std::vector<double> energies;
+        energies.reserve(n_images);
+        for (const auto& img: neb.images) {
+            energies.push_back(img.en);
+        }
+        return energies;
     }
 
     double get_path_length(double *init_coords_ptr,
