@@ -501,7 +501,9 @@ class NEB:
             raise ValueError("Cannot construct a NEB with less than 3 images")
 
         idpp = IDPP(n_images=num, sequential=sidpp)
-        interm_coords = idpp.get_path(initial.coordinates, final.coordinates)
+        interm_coords, _ = idpp.get_path(
+            initial.coordinates, final.coordinates
+        )
 
         coords_len = initial.n_atoms * 3
         assert len(interm_coords) == (num - 2) * coords_len
