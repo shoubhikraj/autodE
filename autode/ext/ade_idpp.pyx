@@ -32,6 +32,7 @@ cdef IdppParams handle_kwargs(kwargs) except *:
     calc_params.maxiter = kwargs.get('maxiter')
     calc_params.add_img_maxgtol = kwargs.get('add_img_maxgtol')
     calc_params.add_img_maxiter = kwargs.get('add_img_maxiter')
+    calc_params.use_wts = kwargs.get('use_wts')
 
     # change the debug option according to current logging level
     debug_print = logger.isEnabledFor(logging.DEBUG)

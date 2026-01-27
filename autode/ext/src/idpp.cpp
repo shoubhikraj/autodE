@@ -144,8 +144,9 @@ namespace autode {
 
     IDPPotential::IDPPotential(const arrx::array1d& init_coords,
                                const arrx::array1d& final_coords,
-                               const int num_images)
-     : n_images(num_images) {
+                               const int num_images,
+                               const bool to_use_wts)
+     : n_images{num_images}, use_wts{to_use_wts} {
         /* Create an IDPP potential
          *
          * Arguments:
@@ -248,14 +249,20 @@ namespace autode {
                 double dist_pow_5 = dist_pow_4 * dist;
                 double dist_pow_6 = dist_pow_5 * dist;
 
+                // weight terms
+                double wt = 1.0;
+                if (use_wts) {
+                    wt = (*d_wt_ptr);
+                }
+
                 // energy terms
-                img.en += (*d_wt_ptr) * 1.0 / dist_pow_4
+                img.en += wt * 1.0 / dist_pow_4
                                             * std::pow(*target_d_ptr - dist, 2);
 
                 auto grad_prefac = (-2.0) / dist_pow_4
                         + 6.0 * (*target_d_ptr) / dist_pow_5
                         - 4.0 * std::pow(*target_d_ptr, 2) / dist_pow_6;
-                grad_prefac *= (*d_wt_ptr);
+                grad_prefac *= wt;
 
                 // gradient terms
                 dist_vec *= grad_prefac;
@@ -761,7 +768,8 @@ namespace autode {
 
         debug_pr = params.debug;
 
-        auto pot = IDPPotential(init_coords, final_coords, num_images);
+        auto pot = IDPPotential(
+            init_coords, final_coords, num_images, params.use_wts);
 
         auto neb = NEB(
             std::move(init_coords), std::move(final_coords),

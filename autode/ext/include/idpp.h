@@ -16,6 +16,7 @@ namespace autode
         int maxiter; // maxiter for path
         double add_img_maxgtol; // Max gradient tol. for adding img
         double add_img_maxiter; // maxiter for each image addition
+        bool use_wts;  // whether to use weights for bonds that remian unchanged
 
         void check_validity() const;
     };
@@ -54,6 +55,7 @@ namespace autode
         int n_atoms;  // Total number of atoms
         int n_images;  // Total number of images
         std::vector<arrx::array1d> all_target_ds; // interpolated bond distances
+        bool use_wts;
         std::vector<double> d_wts; // weights for each bond
 
     public:
@@ -61,7 +63,8 @@ namespace autode
 
         explicit IDPPotential(const arrx::array1d& init_coords,
                                const arrx::array1d& final_coords,
-                               const int num_images);
+                               const int num_images,
+                               const bool to_use_wts);
 
         void calc_idpp_engrad(const int idx, Image& img) const;
     };

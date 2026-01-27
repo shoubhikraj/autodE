@@ -32,6 +32,7 @@ class IDPP:
         maxiter: int = 1000,
         add_img_maxgtol: float = 2e-3,
         add_img_maxiter: int = 200,
+        use_bond_weights: bool = False,
     ):
         """
         Initialise an IDPP calculation
@@ -53,6 +54,7 @@ class IDPP:
         self._maxiter = int(maxiter)
         self._add_img_maxgtol = float(add_img_maxgtol)
         self._add_img_maxiter = int(add_img_maxiter)
+        self._use_bond_wts = use_bond_weights
 
     def get_path(
         self, init_coords: np.ndarray, final_coords: np.ndarray
@@ -83,6 +85,7 @@ class IDPP:
             maxiter=self._maxiter,
             add_img_maxgtol=self._add_img_maxgtol,
             add_img_maxiter=self._add_img_maxiter,
+            use_wts=self._use_bond_wts,
         )
 
     def get_path_length(
@@ -108,6 +111,7 @@ class IDPP:
             maxiter=self._maxiter,
             add_img_maxgtol=self._add_img_maxgtol,
             add_img_maxiter=self._add_img_maxiter,
+            use_wts=self._use_bond_wts,
         )
 
     def relax_path(self, coords_list: List[np.ndarray]) -> List[np.ndarray]:
@@ -135,6 +139,7 @@ class IDPP:
             maxiter=self._maxiter,
             add_img_maxgtol=self._add_img_maxgtol,
             add_img_maxiter=self._add_img_maxiter,
+            use_wts=self._use_bond_wts,
         )
         for i in range(n_images):
             coords_list[i] = all_coords[i * coords_len : (i + 1) * coords_len]
