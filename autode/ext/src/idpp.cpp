@@ -194,8 +194,10 @@ namespace autode {
                 final_ds[counter] = dist;
 
                 // Bonds that do not change should have higher weights
+                // decays to 0 around 0.2 Angstrom difference
                 double delta_d = std::abs(final_ds[counter] - init_ds[counter]);
-                d_wts[counter] = 1.0 + std::exp(-2.0 * delta_d);
+                d_wts[counter]
+                        = 1.0 + 0.5 * std::exp(-80.0 * delta_d * delta_d);
 
                 counter++;
             }
