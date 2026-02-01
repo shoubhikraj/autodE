@@ -197,7 +197,7 @@ namespace autode {
                 // decays to 0 around 0.2 Angstrom difference
                 double delta_d = std::abs(final_ds[counter] - init_ds[counter]);
                 d_wts[counter]
-                        = 1.0 + 0.5 * std::exp(-80.0 * delta_d * delta_d);
+                        = 1.0 + std::exp(-90.0 * delta_d * delta_d);
 
                 counter++;
             }
