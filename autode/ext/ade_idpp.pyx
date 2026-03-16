@@ -33,6 +33,7 @@ cdef IdppParams handle_kwargs(kwargs) except *:
     calc_params.add_img_maxgtol = kwargs.get('add_img_maxgtol')
     calc_params.add_img_maxiter = kwargs.get('add_img_maxiter')
     calc_params.use_wts = kwargs.get('use_wts')
+    calc_params.use_harmonic_term = kwargs.get('use_harmonic_term')
 
     # change the debug option according to current logging level
     debug_print = logger.isEnabledFor(logging.DEBUG)

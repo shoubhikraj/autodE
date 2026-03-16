@@ -145,8 +145,9 @@ namespace autode {
     IDPPotential::IDPPotential(const arrx::array1d& init_coords,
                                const arrx::array1d& final_coords,
                                const int num_images,
-                               const bool to_use_wts)
-     : n_images{num_images}, use_wts{to_use_wts} {
+                               const bool to_use_wts,
+                               const bool to_use_harmonic)
+    : n_images{num_images}, use_wts{to_use_wts}, use_harmonic{to_use_harmonic} {
         /* Create an IDPP potential
          *
          * Arguments:
@@ -256,6 +257,32 @@ namespace autode {
                 if (use_wts) {
                     wt = (*d_wt_ptr);
                 }
+
+                double grad_prefac;
+
+                if (use_harmonic) {
+                    // Harmonic variant:
+                    // E = wt * (r - k)^2 / k^4
+                    double target_d_pow_2 = (*target_d_ptr) * (*target_d_ptr);
+                    double target_d_pow_4 = target_d_pow_2 * target_d_pow_2;
+                    double delta = dist - (*target_d_ptr);
+
+                    img.en += wt * (delta * delta) / target_d_pow_4;
+
+                    // grad = [2 (r - k) / (k^4 r)] * (r_i - r_j)
+                    grad_prefac = 2.0 * delta / (target_d_pow_4 * dist);
+                    grad_prefac *= wt;
+                } else {
+                    // Original IDPP term:
+                    // E = wt * (k - r)^2 / r^4
+                    img.en += wt * std::pow(*target_d_ptr - dist, 2) / dist_pow_4;
+
+                    grad_prefac = (-2.0) / dist_pow_4
+                                + 6.0 * (*target_d_ptr) / dist_pow_5
+                                - 4.0 * (*target_d_ptr) * (*target_d_ptr) / dist_pow_6;
+                    grad_prefac *= wt;
+                }
+
 
                 // energy terms
                 img.en += wt * 1.0 / dist_pow_4
@@ -771,7 +798,9 @@ namespace autode {
         debug_pr = params.debug;
 
         auto pot = IDPPotential(
-            init_coords, final_coords, num_images, params.use_wts);
+            init_coords, final_coords, num_images,
+            params.use_wts, params.use_harmonic_term
+        );
 
         auto neb = NEB(
             std::move(init_coords), std::move(final_coords),

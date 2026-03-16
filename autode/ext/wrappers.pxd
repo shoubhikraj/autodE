@@ -105,6 +105,7 @@ cdef extern from "include/idpp.h" namespace "autode":
         double add_img_maxgtol
         double add_img_maxiter
         bool_t use_wts
+        bool_t use_harmonic_term
 
 cdef extern from "include/idpp.h" namespace "autode":
     vector[double] calculate_idpp_path(double* init_coords_ptr,
