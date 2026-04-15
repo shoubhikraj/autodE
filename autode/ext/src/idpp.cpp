@@ -283,22 +283,14 @@ namespace autode {
                     grad_prefac *= wt;
                 }
 
-
-                // energy terms
-                img.en += wt * 1.0 / dist_pow_4
-                                            * std::pow(*target_d_ptr - dist, 2);
-
-                auto grad_prefac = (-2.0) / dist_pow_4
-                        + 6.0 * (*target_d_ptr) / dist_pow_5
-                        - 4.0 * std::pow(*target_d_ptr, 2) / dist_pow_6;
-                grad_prefac *= wt;
-
                 // gradient terms
                 dist_vec *= grad_prefac;
                 arrx::slice(img.grad, atom_i * 3, atom_i * 3 + 3) += dist_vec;
                 arrx::slice(img.grad, atom_j * 3, atom_j * 3 + 3) -= dist_vec;
                 target_d_ptr++;
-                d_wt_ptr++;
+                if (use_wts)  {
+                    d_wt_ptr++;
+                }
             }
         }
     }
